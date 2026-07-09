@@ -29,7 +29,8 @@ public class InviteUserDto
     /// Initial password for the invited user (hashed with BCrypt before storage).
     /// </summary>
     [Required(ErrorMessage = "Password is required")]
-    [MinLength(6, ErrorMessage = "Password must be at least 6 characters")]
+    [MinLength(8, ErrorMessage = "Password must be at least 8 characters")]
+    [RegularExpression(@"^(?=.*[A-Z]).*$", ErrorMessage = "Password must contain at least one uppercase letter")]
     public string Password { get; set; } = null!;
 
     /// <summary>
