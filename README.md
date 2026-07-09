@@ -1,4 +1,4 @@
-# AlonProject
+# Inventory App — Backend
 
 A .NET 10 ASP.NET Core Web API for warehouse and inventory management with secure authentication, role-based authorization, and audit trails.
 
