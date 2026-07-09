@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+	  <TargetFramework>net10.0</TargetFramework>
+	  <ImplicitUsings>enable</ImplicitUsings>
+	  <Nullable>enable</Nullable>
+	  <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+	  <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+  </PropertyGroup>
+
+  <ItemGroup>
+	<ProjectReference Include="..\AlonProject.Domain\AlonProject.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+	<PackageReference Include="BCrypt.Net-Next" Version="4.2.0" />
+	<PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
+	<PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.0" />
+	<PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.0.1" />
+	<PackageReference Include="Microsoft.IdentityModel.Tokens" Version="8.0.1" />
+  </ItemGroup>
+
+</Project>

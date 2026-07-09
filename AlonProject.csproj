@@ -1,0 +1,41 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+		<GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+		<DefaultItemExcludes>$(DefaultItemExcludes);AlonProject.Domain\**;AlonProject.Application\**;AlonProject.Infrastructure\**</DefaultItemExcludes>
+	  <UserSecretsId>1df470f7-ae31-4eda-8996-9f579fe85708</UserSecretsId>
+  </PropertyGroup>
+
+	<ItemGroup>
+	  <ProjectReference Include="AlonProject.Application\AlonProject.Application.csproj" />
+	  <ProjectReference Include="AlonProject.Infrastructure\AlonProject.Infrastructure.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.9" />
+		<PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.9" />
+		<PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="10.0.9">
+		  <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+		  <PrivateAssets>all</PrivateAssets>
+		</PackageReference>
+		<PackageReference Include="Microsoft.OpenApi" Version="2.10.0" />
+		<PackageReference Include="Scalar.AspNetCore" Version="2.0.8" />
+		<PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.9" />
+		<PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.9" />
+		<PackageReference Include="Serilog.AspNetCore" Version="9.0.0" />
+		<PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />
+		<PackageReference Include="Serilog.Sinks.File" Version="6.0.0" />
+
+	</ItemGroup>
+
+	<ItemGroup>
+	  <Folder Include=".github\" />
+	  <Folder Include="AlonProject\" />
+	  <Folder Include="Controllers\" />
+	</ItemGroup>
+
+</Project>

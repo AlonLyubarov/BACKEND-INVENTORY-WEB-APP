@@ -1,0 +1,6 @@
+@AlonProject_HostAddress = http://localhost:5291/swagger
+
+GET {{AlonProject_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

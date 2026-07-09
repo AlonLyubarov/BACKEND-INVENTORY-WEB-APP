@@ -1,0 +1,22 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+	  <TargetFramework>net10.0</TargetFramework>
+	  <ImplicitUsings>enable</ImplicitUsings>
+	  <Nullable>enable</Nullable>
+	  <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+	  <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+  </PropertyGroup>
+
+  <ItemGroup>
+	<PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.0" />
+	<PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.0" />
+	<PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.0" />
+	<PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.9" />
+  </ItemGroup>
+
+  <ItemGroup>
+	<ProjectReference Include="..\AlonProject.Domain\AlonProject.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

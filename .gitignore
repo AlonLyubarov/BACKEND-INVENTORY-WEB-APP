@@ -1,0 +1,43 @@
+# Environment and secrets 
+appsettings.Development.json
+appsettings.*.json
+.env
+.env.local
+
+# User secrets directory (used by dotnet user-secrets)
+secrets.json
+
+# Key Vault and credential files
+*.pem
+*.pfx
+*.key
+credentials.json
+
+# Build results
+[Bb]in/
+[Oo]bj/
+[Ll]og*/
+
+# IDE
+.vs/
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Rider
+.idea/
+*.sln.iml
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# NuGet
+*.nupkg
+*.snupkg

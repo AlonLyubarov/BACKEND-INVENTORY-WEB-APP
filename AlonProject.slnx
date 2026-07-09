@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="AlonProject.csproj" />
+  <Project Path="AlonProject.Domain\AlonProject.Domain.csproj" />
+  <Project Path="AlonProject.Application\AlonProject.Application.csproj" />
+  <Project Path="AlonProject.Infrastructure\AlonProject.Infrastructure.csproj" />
+</Solution>
