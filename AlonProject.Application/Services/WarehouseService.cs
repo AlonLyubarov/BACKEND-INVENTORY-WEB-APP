@@ -191,10 +191,12 @@ public class WarehouseService : IWarehouseService
                 itemDtos.Add(await MapItemToDtoAsync(item));
             }
 
-            // Get all transactions for these items
+            // Get all transactions for this warehouse tree. Filter by the item's
+            // warehouse node (not by the visible items list) so the audit trail of
+            // soft-deleted items keeps showing what was removed.
             var allTransactions = await _transactionRepository.GetAllAsync();
             var warehouseTransactions = allTransactions
-                .Where(t => itemDtos.Any(i => i.Id == t.ItemId))
+                .Where(t => t.Item != null && nodeIds.Contains(t.Item.WarehouseId))
                 .ToList();
 
             var transactionDtos = warehouseTransactions.Select(MapTransactionToDto).ToList();
@@ -284,15 +286,12 @@ public class WarehouseService : IWarehouseService
                 return Enumerable.Empty<TransactionDto>();
             }
 
-            // Get items in this node and its sub-warehouses (hierarchy-aware, FK-based)
+            // Hierarchy-aware: filter by the item's warehouse node (not by the
+            // visible items list) so soft-deleted items keep their audit trail.
             var nodeIds = await GetNodeAndSubIdsAsync(warehouseId);
-            var items = await _itemRepository.GetByWarehouseIdsAsync(nodeIds);
-            var itemIds = items.Select(i => i.Id).ToList();
-
-            // Get all transactions and filter by warehouse items
             var allTransactions = await _transactionRepository.GetAllAsync();
             var warehouseTransactions = allTransactions
-                .Where(t => itemIds.Contains(t.ItemId))
+                .Where(t => t.Item != null && nodeIds.Contains(t.Item.WarehouseId))
                 .OrderByDescending(t => t.CreatedAt)
                 .ToList();
 
@@ -525,7 +524,9 @@ public class WarehouseService : IWarehouseService
             Type = entity.Type,
             Quantity = entity.Quantity,
             Notes = entity.Notes,
-            CreatedAt = entity.CreatedAt
+            CreatedAt = entity.CreatedAt,
+            ProductSku = entity.Item?.ProductCatalog?.Sku,
+            ProductName = entity.Item?.ProductCatalog?.Name
         };
     }
 }

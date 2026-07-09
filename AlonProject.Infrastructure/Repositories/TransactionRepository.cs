@@ -16,13 +16,17 @@ public class TransactionRepository : ITransactionRepository
 
     public async Task<Transaction?> GetByIdAsync(int id)
     {
-        return await _context.Transactions.Include(t => t.Item).FirstOrDefaultAsync(t => t.Id == id);
+        return await _context.Transactions
+            .Include(t => t.Item)
+                .ThenInclude(i => i!.ProductCatalog)
+            .FirstOrDefaultAsync(t => t.Id == id);
     }
 
     public async Task<IEnumerable<Transaction>> GetByItemIdAsync(int itemId)
     {
         return await _context.Transactions
             .Include(t => t.Item)
+                .ThenInclude(i => i!.ProductCatalog)
             .Where(t => t.ItemId == itemId)
             .OrderByDescending(t => t.CreatedAt)
             .ToListAsync();
@@ -32,6 +36,7 @@ public class TransactionRepository : ITransactionRepository
     {
         return await _context.Transactions
             .Include(t => t.Item)
+                .ThenInclude(i => i!.ProductCatalog)
             .OrderByDescending(t => t.CreatedAt)
             .ToListAsync();
     }

@@ -265,7 +265,9 @@ public class TransactionService : ITransactionService
             Type = entity.Type,
             Quantity = entity.Quantity,
             Notes = entity.Notes,
-            CreatedAt = entity.CreatedAt
+            CreatedAt = entity.CreatedAt,
+            ProductSku = entity.Item?.ProductCatalog?.Sku,
+            ProductName = entity.Item?.ProductCatalog?.Name
         };
     }
 }
