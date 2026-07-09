@@ -1,4 +1,4 @@
-# Environment and secrets 
+# Environment and secrets
 appsettings.Development.json
 appsettings.*.json
 .env

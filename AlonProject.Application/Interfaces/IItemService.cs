@@ -17,7 +17,7 @@ public interface IItemService
     Task<IEnumerable<ItemDto>> GetAllAsync(string role, int? warehouseId);
 
     /// <summary>
-    /// HIERARCHY: Retrieves all items visible to the user across their warehouse tree(s).
+    /// HIERARCHY: Retrieves All items visible to the user across their warehouse tree(s).
     /// Admin (owner): items from ALL owned main warehouses and their sub-warehouses (DB-resolved).
     /// Employee/ShiftManager: items from their assigned main warehouse and its sub-warehouses.
     /// </summary>
