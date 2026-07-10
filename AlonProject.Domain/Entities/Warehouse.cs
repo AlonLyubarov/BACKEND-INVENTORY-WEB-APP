@@ -22,6 +22,15 @@ public class Warehouse
     public string Location { get; set; } = null!;
 
     /// <summary>
+    /// Real map coordinates of the warehouse. REQUIRED for main warehouses
+    /// (used for navigation/route planning between them); sub-warehouses
+    /// inherit their parent's coordinates since they share the same site.
+    /// Nullable in the schema for backward compatibility with older rows.
+    /// </summary>
+    public double? Latitude { get; set; }
+    public double? Longitude { get; set; }
+
+    /// <summary>
     /// When this warehouse record was created.
     /// </summary>
     public DateTime CreatedAt { get; set; }

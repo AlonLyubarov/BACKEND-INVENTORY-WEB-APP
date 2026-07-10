@@ -51,4 +51,16 @@ public class RegisterUserDto
     [Required(ErrorMessage = "Warehouse location is required")]
     [MaxLength(200, ErrorMessage = "Warehouse location must not exceed 200 characters")]
     public string WarehouseLocation { get; set; } = null!;
+
+    /// <summary>
+    /// Real map coordinates of the main warehouse — required so main
+    /// warehouses can be navigated between (route planning).
+    /// </summary>
+    [Required(ErrorMessage = "Warehouse map location (latitude) is required")]
+    [Range(-90, 90, ErrorMessage = "Latitude must be between -90 and 90")]
+    public double? WarehouseLatitude { get; set; }
+
+    [Required(ErrorMessage = "Warehouse map location (longitude) is required")]
+    [Range(-180, 180, ErrorMessage = "Longitude must be between -180 and 180")]
+    public double? WarehouseLongitude { get; set; }
 }

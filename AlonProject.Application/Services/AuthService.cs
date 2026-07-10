@@ -74,11 +74,15 @@ public class AuthService : IAuthService
                 WarehouseId = null  // Owners are linked via Warehouse.OwnerId, not User.WarehouseId
             };
 
-            // The owner's main warehouse (OwnerId is set inside the atomic create)
+            // The owner's main warehouse (OwnerId is set inside the atomic create).
+            // Coordinates are [Required] on the DTO — main warehouses always carry
+            // a real map location so routes between them can be computed.
             var warehouse = new Warehouse
             {
                 Name = dto.WarehouseName,
                 Location = dto.WarehouseLocation,
+                Latitude = dto.WarehouseLatitude,
+                Longitude = dto.WarehouseLongitude,
                 ParentWarehouseId = null
             };
 

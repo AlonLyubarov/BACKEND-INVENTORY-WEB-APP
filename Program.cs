@@ -110,6 +110,16 @@ try
     builder.Services.AddScoped<IReminderService, ReminderService>();
     Log.Information("Application services registered");
 
+    // Geocoding proxy: named HttpClient with the User-Agent Nominatim's usage
+    // policy requires, plus an in-memory cache for repeated address lookups.
+    builder.Services.AddMemoryCache();
+    builder.Services.AddHttpClient("nominatim", client =>
+    {
+        client.Timeout = TimeSpan.FromSeconds(8);
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("AlonProject-Inventory/1.0 (alonu4@gmail.com)");
+    });
+    Log.Information("Geocoding HTTP client registered");
+
     // CORS configuration - Allow Angular frontend on port 4200
     builder.Services.AddCors(options =>
     {

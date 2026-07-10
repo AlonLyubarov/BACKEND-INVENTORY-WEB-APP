@@ -44,6 +44,13 @@ public class WarehouseDto
     public int UserCount { get; set; }
 
     /// <summary>
+    /// Real map coordinates. Set for main warehouses (required at creation);
+    /// sub-warehouses carry their parent's coordinates. Null on legacy rows.
+    /// </summary>
+    public double? Latitude { get; set; }
+    public double? Longitude { get; set; }
+
+    /// <summary>
     /// Parent warehouse ID. Null for main warehouses, set for sub-warehouses.
     /// </summary>
     public int? ParentWarehouseId { get; set; }

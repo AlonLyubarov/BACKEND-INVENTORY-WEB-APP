@@ -156,6 +156,9 @@ public class WarehouseService : IWarehouseService
         {
             Name = dto.Name,
             Location = dto.Location,
+            // Sub-warehouses share the parent's site — inherit its coordinates
+            Latitude = parent.Latitude,
+            Longitude = parent.Longitude,
             ParentWarehouseId = parentId,
             OwnerId = null,  // Ownership is inherited from the parent (root) warehouse
             CreatedAt = DateTime.UtcNow
@@ -318,10 +321,18 @@ public class WarehouseService : IWarehouseService
         _logger.LogInformation("Creating new main warehouse. Name: {WarehouseName}, Location: {Location}, Owner: {OwnerId}", dto.Name, dto.Location, ownerId);
         try
         {
+            if (dto.Latitude == null || dto.Longitude == null)
+            {
+                // Main warehouses are navigation targets — a real map point is mandatory
+                throw new InvalidOperationException("A real map location is required for a main warehouse. Pick a point on the map.");
+            }
+
             var entity = new Warehouse
             {
                 Name = dto.Name,
                 Location = dto.Location,
+                Latitude = dto.Latitude,
+                Longitude = dto.Longitude,
                 OwnerId = ownerId,
                 ParentWarehouseId = null,
                 CreatedAt = DateTime.UtcNow
@@ -358,8 +369,37 @@ public class WarehouseService : IWarehouseService
             entity.Location = dto.Location;
             entity.UpdatedAt = DateTime.UtcNow;
 
+            if (entity.ParentWarehouseId == null)
+            {
+                // Main warehouse: a real map point stays mandatory. Accept new
+                // coordinates, or keep the existing ones when none were sent.
+                var latitude = dto.Latitude ?? entity.Latitude;
+                var longitude = dto.Longitude ?? entity.Longitude;
+                if (latitude == null || longitude == null)
+                {
+                    throw new InvalidOperationException("A real map location is required for a main warehouse. Pick a point on the map.");
+                }
+                entity.Latitude = latitude;
+                entity.Longitude = longitude;
+            }
+
             // Update in database
             await _warehouseRepository.UpdateAsync(entity);
+
+            if (entity.ParentWarehouseId == null)
+            {
+                // Sub-warehouses share the parent's site — keep them in sync
+                var subs = await _warehouseRepository.GetSubWarehousesAsync(entity.Id);
+                foreach (var sub in subs)
+                {
+                    if (sub.Latitude != entity.Latitude || sub.Longitude != entity.Longitude)
+                    {
+                        sub.Latitude = entity.Latitude;
+                        sub.Longitude = entity.Longitude;
+                        await _warehouseRepository.UpdateAsync(sub);
+                    }
+                }
+            }
 
             _logger.LogInformation("Warehouse updated successfully. ID: {WarehouseId}", id);
             return await MapToDtoAsync(entity);
@@ -432,6 +472,8 @@ public class WarehouseService : IWarehouseService
             Id = entity.Id,
             Name = entity.Name,
             Location = entity.Location,
+            Latitude = entity.Latitude,
+            Longitude = entity.Longitude,
             CreatedAt = entity.CreatedAt,
             UpdatedAt = entity.UpdatedAt,
             UserCount = await GetUserCountAsync(entity),

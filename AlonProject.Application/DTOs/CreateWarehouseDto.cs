@@ -25,4 +25,15 @@ public class CreateWarehouseDto
     [MaxLength(200, ErrorMessage = "Location cannot exceed 200 characters")]
     [MinLength(2, ErrorMessage = "Location must be at least 2 characters")]
     public string Location { get; set; } = null!;
+
+    /// <summary>
+    /// Real map coordinates. REQUIRED for main warehouses (enforced by the
+    /// service — this DTO is shared with sub-warehouse creation, where the
+    /// coordinates are inherited from the parent and may be omitted).
+    /// </summary>
+    [Range(-90, 90, ErrorMessage = "Latitude must be between -90 and 90")]
+    public double? Latitude { get; set; }
+
+    [Range(-180, 180, ErrorMessage = "Longitude must be between -180 and 180")]
+    public double? Longitude { get; set; }
 }
