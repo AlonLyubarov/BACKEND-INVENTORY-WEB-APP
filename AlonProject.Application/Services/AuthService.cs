@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
 using AlonProject.Application.DTOs;
 using AlonProject.Application.Interfaces;
@@ -21,15 +22,18 @@ public class AuthService : IAuthService
 {
     private readonly IUserRepository _userRepository;
     private readonly IConfiguration _configuration;
+    private readonly IEmailSender _emailSender;
     private readonly ILogger<AuthService> _logger;
 
     public AuthService(
         IUserRepository userRepository,
         IConfiguration configuration,
+        IEmailSender emailSender,
         ILogger<AuthService> logger)
     {
         _userRepository = userRepository;
         _configuration = configuration;
+        _emailSender = emailSender;
         _logger = logger;
     }
 
@@ -71,7 +75,11 @@ public class AuthService : IAuthService
                 Email = dto.Email,
                 PasswordHash = passwordHash,
                 Role = UserRole.Admin,
-                WarehouseId = null  // Owners are linked via Warehouse.OwnerId, not User.WarehouseId
+                WarehouseId = null,  // Owners are linked via Warehouse.OwnerId, not User.WarehouseId
+                // Self-registered accounts must prove the email is theirs before signing in
+                EmailVerified = false,
+                EmailVerificationToken = GenerateVerificationToken(),
+                EmailVerificationTokenExpiresAt = DateTime.UtcNow.AddHours(24)
             };
 
             // The owner's main warehouse (OwnerId is set inside the atomic create).
@@ -91,6 +99,16 @@ public class AuthService : IAuthService
 
             _logger.LogInformation("Auth Register Success: Owner created - ID: {UserId}, Username: {Username}, Role: Admin, Main warehouse: {WarehouseId} ({WarehouseName})",
                 createdUser.Id, createdUser.Username, createdWarehouse.Id, createdWarehouse.Name);
+
+            // Send the verification email; a delivery failure must not undo registration
+            try
+            {
+                await SendVerificationEmailAsync(createdUser);
+            }
+            catch (Exception mailEx)
+            {
+                _logger.LogError(mailEx, "Failed to send verification email to {Email} — user can request a resend", createdUser.Email);
+            }
 
             // Return as UserDto (never include PasswordHash in response)
             return new UserDto
@@ -144,7 +162,9 @@ public class AuthService : IAuthService
             Email = dto.Email,
             PasswordHash = passwordHash,
             Role = dto.Role,
-            WarehouseId = warehouseId  // Assigned directly to the owner's main warehouse
+            WarehouseId = warehouseId,  // Assigned directly to the owner's main warehouse
+            // The owner supplied this email — invited accounts start verified
+            EmailVerified = true
         };
 
         var created = await _userRepository.CreateAsync(user);
@@ -189,6 +209,13 @@ public class AuthService : IAuthService
             throw new UnauthorizedAccessException("Invalid username or password.");
         }
 
+        // SECURITY: the email must be proven before the account can be used
+        if (!user.EmailVerified)
+        {
+            _logger.LogWarning("Auth Login Failed: Email not verified for username: {Username}", dto.Username);
+            throw new UnauthorizedAccessException("Your email is not verified yet. Check your inbox for the verification link.");
+        }
+
         try
         {
             // Generate JWT token
@@ -215,6 +242,85 @@ public class AuthService : IAuthService
                 dto.Username);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Verifies a user's email using the one-time token from the email link.
+    /// </summary>
+    public async Task VerifyEmailAsync(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            throw new InvalidOperationException("Invalid verification link.");
+        }
+
+        var user = await _userRepository.GetByVerificationTokenAsync(token);
+        if (user == null)
+        {
+            _logger.LogWarning("Email verification failed: unknown or already-used token");
+            throw new InvalidOperationException("This verification link is invalid or was already used.");
+        }
+
+        if (user.EmailVerificationTokenExpiresAt == null || user.EmailVerificationTokenExpiresAt < DateTime.UtcNow)
+        {
+            _logger.LogWarning("Email verification failed: expired token for user {UserId}", user.Id);
+            throw new InvalidOperationException("This verification link has expired. Request a new one.");
+        }
+
+        user.EmailVerified = true;
+        user.EmailVerificationToken = null;
+        user.EmailVerificationTokenExpiresAt = null;
+        user.UpdatedAt = DateTime.UtcNow;
+        await _userRepository.UpdateAsync(user);
+
+        _logger.LogInformation("Email verified for user {UserId} ({Username})", user.Id, user.Username);
+    }
+
+    /// <summary>
+    /// Re-sends the verification email when the address belongs to an
+    /// unverified account. Always succeeds silently — no account probing.
+    /// </summary>
+    public async Task ResendVerificationAsync(string email)
+    {
+        var user = await _userRepository.GetByEmailAsync(email);
+        if (user == null || user.EmailVerified)
+        {
+            _logger.LogInformation("Resend verification requested for {Email} — nothing to do", email);
+            return;
+        }
+
+        user.EmailVerificationToken = GenerateVerificationToken();
+        user.EmailVerificationTokenExpiresAt = DateTime.UtcNow.AddHours(24);
+        await _userRepository.UpdateAsync(user);
+
+        await SendVerificationEmailAsync(user);
+        _logger.LogInformation("Verification email re-sent to {Email}", email);
+    }
+
+    /// <summary>
+    /// Cryptographically random one-time token for the email link.
+    /// </summary>
+    private static string GenerateVerificationToken()
+    {
+        return Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+    }
+
+    /// <summary>
+    /// Composes and sends the verification email with the frontend link.
+    /// </summary>
+    private async Task SendVerificationEmailAsync(User user)
+    {
+        var frontendBaseUrl = _configuration["App:FrontendBaseUrl"] ?? "http://localhost:4200";
+        var link = $"{frontendBaseUrl}/verify-email?token={user.EmailVerificationToken}";
+
+        var body =
+            $"<h2>Welcome to Warehouse Manager, {user.Username}!</h2>" +
+            $"<p>Confirm your email address to activate your account:</p>" +
+            $"<p><a href=\"{link}\">Verify my email</a></p>" +
+            $"<p>Or paste this link into your browser:<br>{link}</p>" +
+            $"<p>The link is valid for 24 hours. If you didn't register, ignore this email.</p>";
+
+        await _emailSender.SendAsync(user.Email, "Verify your email — Warehouse Manager", body);
     }
 
     /// <summary>

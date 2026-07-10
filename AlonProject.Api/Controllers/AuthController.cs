@@ -24,7 +24,7 @@ public class AuthController : ControllerBase
     /// <summary>
     /// Register a new warehouse OWNER account.
     /// Creates the user (Role = Admin) and their MAIN warehouse atomically in one transaction.
-    /// SECURITY: Role is decided by the server — clients cannot influence it.
+    /// SECURITY: Role is decided by the server ï¿½ clients cannot influence it.
     /// Employees are NOT created here; they are invited later by the owner
     /// via POST /api/warehouse/{id}/invite.
     /// </summary>
@@ -89,5 +89,48 @@ public class AuthController : ControllerBase
             _logger.LogError(ex, "API Error: Unexpected error during authentication");
             return StatusCode(StatusCodes.Status500InternalServerError, new { error = "An unexpected error occurred." });
         }
+    }
+
+    /// <summary>
+    /// POST api/auth/verify-email
+    /// Confirms the caller's email using the one-time token from the email link.
+    /// </summary>
+    /// <response code="200">Email verified â€” the user can now sign in</response>
+    /// <response code="400">Invalid, used, or expired token</response>
+    [HttpPost("verify-email")]
+    public async Task<ActionResult> VerifyEmail([FromBody] VerifyEmailDto dto)
+    {
+        _logger.LogInformation("API Request: POST /api/auth/verify-email");
+        try
+        {
+            await _authService.VerifyEmailAsync(dto.Token);
+            return Ok(new { message = "Email verified. You can sign in now." });
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogWarning("API Error: Email verification failed - {Message}", ex.Message);
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// POST api/auth/resend-verification
+    /// Re-sends the verification email. Always returns 200 so account
+    /// existence cannot be probed.
+    /// </summary>
+    [HttpPost("resend-verification")]
+    public async Task<ActionResult> ResendVerification([FromBody] ResendVerificationDto dto)
+    {
+        _logger.LogInformation("API Request: POST /api/auth/resend-verification");
+        try
+        {
+            await _authService.ResendVerificationAsync(dto.Email);
+        }
+        catch (Exception ex)
+        {
+            // Never leak delivery/account details on this endpoint
+            _logger.LogError(ex, "API Error: Resend verification failed");
+        }
+        return Ok(new { message = "If that email belongs to an unverified account, a new link was sent." });
     }
 }

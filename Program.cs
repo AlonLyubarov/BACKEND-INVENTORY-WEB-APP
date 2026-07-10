@@ -1,5 +1,6 @@
 using Scalar.AspNetCore;
 using AlonProject.Infrastructure.Data;
+using AlonProject.Infrastructure.Email;
 using AlonProject.Infrastructure.Repositories;
 using AlonProject.Domain.Interfaces;
 using AlonProject.Application.Interfaces;
@@ -108,6 +109,7 @@ try
     builder.Services.AddScoped<IWarehouseService, WarehouseService>();
     builder.Services.AddScoped<IWarehouseAccessService, WarehouseAccessService>();
     builder.Services.AddScoped<IReminderService, ReminderService>();
+    builder.Services.AddScoped<IEmailSender, SmtpEmailSender>();
     Log.Information("Application services registered");
 
     // Geocoding proxy: named HttpClient with the User-Agent Nominatim's usage

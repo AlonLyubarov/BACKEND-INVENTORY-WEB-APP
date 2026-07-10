@@ -123,6 +123,9 @@ public class AppDbContext : DbContext
             entity.HasIndex(e => e.Email).IsUnique();  // SECURITY: Enforce unique emails to prevent duplicate registrations
             entity.Property(e => e.PasswordHash).IsRequired();
             entity.Property(e => e.Role).IsRequired();
+            entity.Property(e => e.EmailVerified).HasDefaultValue(false);
+            entity.Property(e => e.EmailVerificationToken).HasMaxLength(100);
+            entity.HasIndex(e => e.EmailVerificationToken);
             entity.Property(e => e.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
             // WarehouseId is nullable: user starts with null, assigned later via invitation
             entity.HasOne(e => e.Warehouse).WithMany(w => w.Users).HasForeignKey(e => e.WarehouseId).OnDelete(DeleteBehavior.Restrict).IsRequired(false);

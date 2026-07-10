@@ -81,6 +81,22 @@ public class UserRepository : IUserRepository
     }
 
     /// <summary>
+    /// Retrieves a user by their email-verification token.
+    /// </summary>
+    public async Task<User?> GetByVerificationTokenAsync(string token)
+    {
+        return await _context.Users.FirstOrDefaultAsync(u => u.EmailVerificationToken == token);
+    }
+
+    /// <summary>
+    /// Retrieves a user by email address.
+    /// </summary>
+    public async Task<User?> GetByEmailAsync(string email)
+    {
+        return await _context.Users.FirstOrDefaultAsync(u => u.Email == email);
+    }
+
+    /// <summary>
     /// Permanently deletes a user record.
     /// </summary>
     public async Task<bool> DeleteAsync(int id)

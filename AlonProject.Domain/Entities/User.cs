@@ -55,6 +55,23 @@ public class User
     public ICollection<Warehouse> OwnedWarehouses { get; set; } = new List<Warehouse>();
 
     /// <summary>
+    /// Whether the user's email address has been verified.
+    /// Self-registered owners must verify before they can sign in;
+    /// invited users are created verified (the owner supplied their email).
+    /// </summary>
+    public bool EmailVerified { get; set; }
+
+    /// <summary>
+    /// One-time token sent in the verification email link. Null once verified.
+    /// </summary>
+    public string? EmailVerificationToken { get; set; }
+
+    /// <summary>
+    /// Expiry of the verification token (UTC). Null once verified.
+    /// </summary>
+    public DateTime? EmailVerificationTokenExpiresAt { get; set; }
+
+    /// <summary>
     /// When this user account was created.
     /// </summary>
     public DateTime CreatedAt { get; set; }

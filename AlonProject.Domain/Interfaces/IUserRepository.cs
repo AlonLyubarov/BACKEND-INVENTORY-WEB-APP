@@ -59,6 +59,16 @@ public interface IUserRepository
     Task<bool> DeleteAsync(int id);
 
     /// <summary>
+    /// Retrieves a user by their email-verification token.
+    /// </summary>
+    Task<User?> GetByVerificationTokenAsync(string token);
+
+    /// <summary>
+    /// Retrieves a user by email address.
+    /// </summary>
+    Task<User?> GetByEmailAsync(string email);
+
+    /// <summary>
     /// Atomically creates a new owner (Admin) user together with their main warehouse.
     /// Both inserts run in one database transaction: either both succeed or neither is persisted.
     /// The warehouse's OwnerId is set to the newly created user's ID.

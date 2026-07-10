@@ -35,6 +35,19 @@ public interface IAuthService
     Task<DTOs.AuthResponseDto> LoginAsync(DTOs.LoginDto dto);
 
     /// <summary>
+    /// Verifies a user's email using the one-time token from the email link.
+    /// </summary>
+    /// <param name="token">Verification token from the email link</param>
+    /// <exception cref="InvalidOperationException">Invalid, used, or expired token</exception>
+    Task VerifyEmailAsync(string token);
+
+    /// <summary>
+    /// Re-sends the verification email if the address belongs to an
+    /// unverified account. Silently succeeds otherwise (no account probing).
+    /// </summary>
+    Task ResendVerificationAsync(string email);
+
+    /// <summary>
     /// Generates a new JWT token for an existing user.
     /// Used after role changes or warehouse assignments to refresh claims in the token.
     /// SECURITY: This prevents stale claims from blocking user access to newly assigned resources.
