@@ -61,6 +61,14 @@ public class AuthService : IAuthService
             throw new InvalidOperationException($"Username '{dto.Username}' is already taken.");
         }
 
+        // Check if email already exists (unique index IX_Users_Email)
+        var existingEmail = await _userRepository.GetByEmailAsync(dto.Email);
+        if (existingEmail != null)
+        {
+            _logger.LogWarning("Auth Register Failed: Email already registered - {Email}", dto.Email);
+            throw new InvalidOperationException($"Email '{dto.Email}' is already registered to another account.");
+        }
+
         try
         {
             // Hash password using BCrypt (never store plain text)
@@ -152,6 +160,14 @@ public class AuthService : IAuthService
         {
             _logger.LogWarning("Auth Invite Failed: Username already exists - {Username}", dto.Username);
             throw new InvalidOperationException($"Username '{dto.Username}' is already taken.");
+        }
+
+        // Check if email already exists (unique index IX_Users_Email)
+        var existingEmail = await _userRepository.GetByEmailAsync(dto.Email);
+        if (existingEmail != null)
+        {
+            _logger.LogWarning("Auth Invite Failed: Email already registered - {Email}", dto.Email);
+            throw new InvalidOperationException($"Email '{dto.Email}' is already registered to another account.");
         }
 
         var passwordHash = BC.HashPassword(dto.Password);

@@ -31,6 +31,13 @@ public class AppDbContext : DbContext
             entity.Property(e => e.Barcode).HasMaxLength(100);
             entity.Property(e => e.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
             entity.HasMany(e => e.Items).WithOne(i => i.ProductCatalog).HasForeignKey(i => i.ProductCatalogId).OnDelete(DeleteBehavior.Cascade);
+
+            // Tenant scoping: each product belongs to one owner's catalog
+            entity.HasIndex(e => e.OwnerId);
+            entity.HasOne(e => e.Owner)
+                .WithMany()
+                .HasForeignKey(e => e.OwnerId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         // Item configuration

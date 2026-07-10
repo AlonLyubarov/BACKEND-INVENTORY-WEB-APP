@@ -2,12 +2,15 @@ using AlonProject.Application.DTOs;
 using AlonProject.Application.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
 
 namespace AlonProject.Api.Controllers;
 
 /// <summary>
 /// REST API controller for Product Catalog management.
-/// Provides endpoints for CRUD operations on product master data including SKU, pricing, and barcodes.
+/// TENANT SCOPING: catalogs belong to warehouse owners. Every request resolves
+/// the caller's owner (Admin: self; Employee/SM: their tree's owner) and only
+/// that owner's products are visible/manageable.
 /// Route: /api/productcatalog
 /// </summary>
 [Authorize]
@@ -25,83 +28,110 @@ public class ProductCatalogController : ControllerBase
     }
 
     /// <summary>
+    /// Resolves the owner whose catalog the caller works with, from JWT claims.
+    /// </summary>
+    private async Task<int?> ResolveOwnerAsync()
+    {
+        var idClaim = User.FindFirst(ClaimTypes.NameIdentifier);
+        if (idClaim == null || !int.TryParse(idClaim.Value, out var userId))
+        {
+            return null;
+        }
+
+        var role = User.FindFirst(ClaimTypes.Role)?.Value ?? string.Empty;
+        int? warehouseId = null;
+        var warehouseClaim = User.FindFirst("WarehouseId");
+        if (warehouseClaim != null && int.TryParse(warehouseClaim.Value, out var parsed))
+        {
+            warehouseId = parsed;
+        }
+
+        return await _service.ResolveOwnerIdAsync(userId, role, warehouseId);
+    }
+
+    /// <summary>
     /// GET api/productcatalog/{id}
-    /// Retrieves a single product by its unique ID.
+    /// Retrieves a single product from the caller's catalog.
     /// </summary>
     [HttpGet("{id}")]
     public async Task<ActionResult<ProductCatalogDto>> GetById(int id)
     {
-        _logger.LogInformation("API Request: GET product by ID: {ProductId}", id);
-        var product = await _service.GetByIdAsync(id);
+        var ownerId = await ResolveOwnerAsync();
+        var product = await _service.GetByIdAsync(id, ownerId);
         if (product == null)
         {
-            _logger.LogWarning("API Response: Product not found. ID: {ProductId}", id);
             return NotFound();
         }
-        _logger.LogDebug("API Response: Product returned. ID: {ProductId}", id);
         return Ok(product);
     }
 
     /// <summary>
     /// GET api/productcatalog/sku/{sku}
-    /// Retrieves a single product by its SKU code.
+    /// Retrieves a single product by SKU from the caller's catalog.
     /// </summary>
     [HttpGet("sku/{sku}")]
     public async Task<ActionResult<ProductCatalogDto>> GetBySku(string sku)
     {
-        _logger.LogInformation("API Request: GET product by SKU: {Sku}", sku);
-        var product = await _service.GetBySkuAsync(sku);
+        var ownerId = await ResolveOwnerAsync();
+        var product = await _service.GetBySkuAsync(sku, ownerId);
         if (product == null)
         {
-            _logger.LogWarning("API Response: Product not found by SKU: {Sku}", sku);
             return NotFound();
         }
-        _logger.LogDebug("API Response: Product returned by SKU. SKU: {Sku}", sku);
         return Ok(product);
     }
 
     /// <summary>
     /// GET api/productcatalog
-    /// Retrieves all products in the catalog.
+    /// Retrieves all products in the caller's catalog.
     /// </summary>
     [HttpGet]
     public async Task<ActionResult<IEnumerable<ProductCatalogDto>>> GetAll()
     {
-        _logger.LogInformation("API Request: GET all products");
-        var products = await _service.GetAllAsync();
-        _logger.LogInformation("API Response: Returned {ProductCount} products", products.Count());
+        var ownerId = await ResolveOwnerAsync();
+        var products = await _service.GetAllAsync(ownerId);
+        _logger.LogInformation("API Response: Returned {ProductCount} products for owner {OwnerId}",
+            products.Count(), ownerId);
         return Ok(products);
     }
 
     /// <summary>
     /// POST api/productcatalog
-    /// Creates a new product in the catalog.
+    /// Creates a new product in the caller's catalog.
     /// Requires: ShiftManager or Admin role
     /// </summary>
     [Authorize(Roles = "ShiftManager,Admin")]
     [HttpPost]
     public async Task<ActionResult<ProductCatalogDto>> Create(CreateProductCatalogDto dto)
     {
-        _logger.LogInformation("API Request: POST create product. SKU: {Sku}, Name: {ProductName}", dto.Sku, dto.Name);
-        var product = await _service.CreateAsync(dto);
-        _logger.LogInformation("API Response: Product created. ID: {ProductId}, SKU: {Sku}", product.Id, dto.Sku);
-        return CreatedAtAction(nameof(GetById), new { id = product.Id }, product);
+        var ownerId = await ResolveOwnerAsync();
+        try
+        {
+            var product = await _service.CreateAsync(dto, ownerId);
+            _logger.LogInformation("API Response: Product created. ID: {ProductId}, SKU: {Sku}, Owner: {OwnerId}",
+                product.Id, dto.Sku, ownerId);
+            return CreatedAtAction(nameof(GetById), new { id = product.Id }, product);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Duplicate SKU within the caller's catalog
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
     /// <summary>
     /// PUT api/productcatalog/{id}
-    /// Updates an existing product in the catalog.
+    /// Updates a product in the caller's catalog.
     /// Requires: ShiftManager or Admin role
     /// </summary>
     [Authorize(Roles = "ShiftManager,Admin")]
     [HttpPut("{id}")]
     public async Task<ActionResult<ProductCatalogDto>> Update(int id, CreateProductCatalogDto dto)
     {
-        _logger.LogInformation("API Request: PUT update product. ID: {ProductId}, SKU: {Sku}", id, dto.Sku);
+        var ownerId = await ResolveOwnerAsync();
         try
         {
-            var product = await _service.UpdateAsync(id, dto);
-            _logger.LogInformation("API Response: Product updated successfully. ID: {ProductId}", id);
+            var product = await _service.UpdateAsync(id, dto, ownerId);
             return Ok(product);
         }
         catch (KeyNotFoundException)
@@ -113,21 +143,20 @@ public class ProductCatalogController : ControllerBase
 
     /// <summary>
     /// DELETE api/productcatalog/{id}
-    /// Deletes a product from the catalog.
+    /// Deletes a product from the caller's catalog.
     /// Requires: ShiftManager or Admin role
     /// </summary>
     [Authorize(Roles = "ShiftManager,Admin")]
     [HttpDelete("{id}")]
     public async Task<ActionResult> Delete(int id)
     {
-        _logger.LogInformation("API Request: DELETE product. ID: {ProductId}", id);
-        var success = await _service.DeleteAsync(id);
+        var ownerId = await ResolveOwnerAsync();
+        var success = await _service.DeleteAsync(id, ownerId);
         if (!success)
         {
-            _logger.LogWarning("API Response: Product not found for deletion. ID: {ProductId}", id);
             return NotFound();
         }
-        _logger.LogInformation("API Response: Product deleted successfully. ID: {ProductId}", id);
+        _logger.LogInformation("API Response: Product deleted. ID: {ProductId}", id);
         return NoContent();
     }
 }
