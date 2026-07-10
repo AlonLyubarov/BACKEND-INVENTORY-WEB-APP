@@ -4,6 +4,7 @@ using System.Text.Json;
 using AlonProject.Application.DTOs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Caching.Memory;
 
 namespace AlonProject.Api.Controllers;
@@ -48,6 +49,7 @@ public class RouteController : ControllerBase
     /// <response code="400">Fewer than 2 stops / malformed coordinates / too many stops</response>
     /// <response code="502">Routing provider unavailable</response>
     [HttpGet("trip")]
+    [EnableRateLimiting("geo")]
     public async Task<ActionResult<RouteTripDto>> Trip([FromQuery] string stops)
     {
         var points = ParseStops(stops);
@@ -64,7 +66,12 @@ public class RouteController : ControllerBase
             return BadRequest(new { error = $"At most {MaxStops} stops are supported per trip." });
         }
 
-        var cacheKey = $"route:{stops}";
+        // Key on the PARSED, normalized coordinates — not the raw query string —
+        // so equivalent inputs share one entry and junk input can't grow the cache.
+        var normalizedStops = string.Join(";",
+            points.Select(p =>
+                $"{p.Lat.ToString("F5", CultureInfo.InvariantCulture)},{p.Lng.ToString("F5", CultureInfo.InvariantCulture)}"));
+        var cacheKey = $"route:{normalizedStops}";
         if (_cache.TryGetValue(cacheKey, out RouteTripDto? cached) && cached != null)
         {
             return Ok(cached);
@@ -119,7 +126,11 @@ public class RouteController : ControllerBase
                 result.VisitOrder.Add(waypoint.GetProperty("waypoint_index").GetInt32());
             }
 
-            _cache.Set(cacheKey, result, CacheDuration);
+            _cache.Set(cacheKey, result, new MemoryCacheEntryOptions
+            {
+                Size = 1,
+                AbsoluteExpirationRelativeToNow = CacheDuration
+            });
             _logger.LogInformation(
                 "Trip computed for {StopCount} stops: {DistanceKm:F1} km, {DurationMin:F0} min",
                 points.Count, result.DistanceMeters / 1000, result.DurationSeconds / 60);

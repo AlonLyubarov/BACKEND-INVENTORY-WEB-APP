@@ -8,10 +8,11 @@ using AlonProject.Application.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.AspNetCore.RateLimiting;
 using Serilog;
-using Serilog.Events;
 using System.Text;
 using System.Text.Json.Serialization;
+using System.Threading.RateLimiting;
 
 // SECURITY: Load environment variables from .env file (if present)
 // For development: copy .env.example to .env and fill in values
@@ -47,13 +48,11 @@ else
     Console.WriteLine("[STARTUP] No .env file found");
 }
 
-// Configure Serilog for comprehensive application logging
+// Bootstrap logger for the pre-builder phase only; the real logger is
+// configured from appsettings ("Serilog" section) once the host exists.
 Log.Logger = new LoggerConfiguration()
-    .MinimumLevel.Debug()
     .WriteTo.Console(outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss} {Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}")
-    .WriteTo.File("logs/alonproject-.txt", rollingInterval: RollingInterval.Day,
-        outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] [{SourceContext}] {Message:lj}{NewLine}{Exception}")
-    .CreateLogger();
+    .CreateBootstrapLogger();
 
 try
 {
@@ -61,8 +60,9 @@ try
 
     var builder = WebApplication.CreateBuilder(args);
 
-    // Add Serilog to the host builder
-    builder.Host.UseSerilog();
+    // Add Serilog to the host builder — levels and sinks come from configuration
+    builder.Host.UseSerilog((context, services, configuration) =>
+        configuration.ReadFrom.Configuration(context.Configuration));
 
     // Add services to the container
     builder.Services.AddControllers()
@@ -113,32 +113,42 @@ try
     Log.Information("Application services registered");
 
     // Geocoding proxy: named HttpClient with the User-Agent Nominatim's usage
-    // policy requires, plus an in-memory cache for repeated address lookups.
-    builder.Services.AddMemoryCache();
+    // policy requires, plus a bounded in-memory cache for repeated lookups.
+    var geoContactEmail = builder.Configuration["Geo:ContactEmail"] ?? "contact@example.com";
+    var geoUserAgent = $"AlonProject-Inventory/1.0 ({geoContactEmail})";
+    builder.Services.AddMemoryCache(options => options.SizeLimit = 1024);
     builder.Services.AddHttpClient("nominatim", client =>
     {
         client.Timeout = TimeSpan.FromSeconds(8);
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("AlonProject-Inventory/1.0 (alonu4@gmail.com)");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd(geoUserAgent);
     });
     builder.Services.AddHttpClient("osrm", client =>
     {
         client.Timeout = TimeSpan.FromSeconds(10);
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("AlonProject-Inventory/1.0 (alonu4@gmail.com)");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd(geoUserAgent);
     });
     Log.Information("Geocoding and routing HTTP clients registered");
 
-    // CORS configuration - Allow Angular frontend on port 4200
+    // CORS configuration — allowed origins come from configuration
+    var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>();
+    if (allowedOrigins == null || allowedOrigins.Length == 0)
+    {
+        Log.Fatal("CRITICAL: Cors:AllowedOrigins is not configured");
+        throw new InvalidOperationException(
+            "Cors:AllowedOrigins must contain at least one origin (appsettings.json or Cors__AllowedOrigins__0 env var).");
+    }
+
     builder.Services.AddCors(options =>
     {
         options.AddPolicy("AllowAngularApp", policy =>
         {
-            policy.WithOrigins("http://localhost:4200")
+            policy.WithOrigins(allowedOrigins)
                   .AllowAnyMethod()
                   .AllowAnyHeader()
                   .AllowCredentials();
         });
     });
-    Log.Information("CORS policy configured for Angular frontend");
+    Log.Information("CORS policy configured for origins: {Origins}", string.Join(", ", allowedOrigins));
 
     // JWT Authentication configuration
     var jwtSettings = builder.Configuration.GetSection("Jwt");
@@ -183,6 +193,50 @@ try
     });
     Log.Information("JWT Bearer authentication configured");
 
+    // Rate limiting — fixed windows partitioned by client IP.
+    // "auth": login/register/verify-email; "email": resend-verification; "geo": geocode/route.
+    builder.Services.AddRateLimiter(options =>
+    {
+        options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+        options.OnRejected = async (context, cancellationToken) =>
+        {
+            context.HttpContext.Response.ContentType = "application/json";
+            await context.HttpContext.Response.WriteAsync(
+                "{\"error\":\"Too many requests. Try again later.\"}", cancellationToken);
+        };
+
+        static string ClientIp(HttpContext httpContext) =>
+            httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+        options.AddPolicy("auth", httpContext => RateLimitPartition.GetFixedWindowLimiter(
+            ClientIp(httpContext),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0
+            }));
+
+        options.AddPolicy("email", httpContext => RateLimitPartition.GetFixedWindowLimiter(
+            ClientIp(httpContext),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 3,
+                Window = TimeSpan.FromMinutes(10),
+                QueueLimit = 0
+            }));
+
+        options.AddPolicy("geo", httpContext => RateLimitPartition.GetFixedWindowLimiter(
+            ClientIp(httpContext),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 30,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0
+            }));
+    });
+    Log.Information("Rate limiting configured (auth: 10/min, email: 3/10min, geo: 30/min per IP)");
+
     var app = builder.Build();
 
     Log.Information("=== Configuring HTTP request pipeline ===");
@@ -203,6 +257,10 @@ try
     // Enable CORS middleware - must come before UseAuthentication and UseAuthorization
     app.UseCors("AllowAngularApp");
     Log.Information("CORS middleware enabled");
+
+    // Rate limiting middleware — policies applied per-endpoint via [EnableRateLimiting]
+    app.UseRateLimiter();
+    Log.Information("Rate limiting middleware enabled");
 
     // Authentication middleware - must come before UseAuthorization
     app.UseAuthentication();

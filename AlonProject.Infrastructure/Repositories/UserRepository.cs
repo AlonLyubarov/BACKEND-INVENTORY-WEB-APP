@@ -81,7 +81,25 @@ public class UserRepository : IUserRepository
     }
 
     /// <summary>
-    /// Retrieves a user by their email-verification token.
+    /// Runs the given work inside a single database transaction.
+    /// </summary>
+    public async Task ExecuteInTransactionAsync(Func<Task> work)
+    {
+        await using var transaction = await _context.Database.BeginTransactionAsync();
+        try
+        {
+            await work();
+            await transaction.CommitAsync();
+        }
+        catch
+        {
+            await transaction.RollbackAsync();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Retrieves a user by their email-verification token (SHA-256 hash).
     /// </summary>
     public async Task<User?> GetByVerificationTokenAsync(string token)
     {

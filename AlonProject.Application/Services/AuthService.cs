@@ -83,6 +83,9 @@ public class AuthService : IAuthService
             // Create the owner user entity
             // SECURITY: Registration always creates an Admin OWNER (server-decided).
             // Employees are added later via the owner's invitation endpoint.
+            // Self-registered accounts must prove the email is theirs before signing in.
+            // The RAW token goes into the email; only its SHA-256 hash is stored.
+            var verificationToken = GenerateVerificationToken();
             var user = new User
             {
                 Username = dto.Username,
@@ -90,10 +93,10 @@ public class AuthService : IAuthService
                 PasswordHash = passwordHash,
                 Role = UserRole.Admin,
                 WarehouseId = null,  // Owners are linked via Warehouse.OwnerId, not User.WarehouseId
-                // Self-registered accounts must prove the email is theirs before signing in
                 EmailVerified = false,
-                EmailVerificationToken = GenerateVerificationToken(),
-                EmailVerificationTokenExpiresAt = DateTime.UtcNow.AddHours(24)
+                EmailVerificationToken = HashToken(verificationToken),
+                EmailVerificationTokenExpiresAt = DateTime.UtcNow.AddHours(24),
+                LastVerificationEmailSentAt = DateTime.UtcNow
             };
 
             // The owner's main warehouse (OwnerId is set inside the atomic create).
@@ -117,7 +120,7 @@ public class AuthService : IAuthService
             // Send the verification email; a delivery failure must not undo registration
             try
             {
-                await SendVerificationEmailAsync(createdUser);
+                await SendVerificationEmailAsync(createdUser, verificationToken);
             }
             catch (Exception mailEx)
             {
@@ -276,7 +279,8 @@ public class AuthService : IAuthService
             throw new InvalidOperationException("Invalid verification link.");
         }
 
-        var user = await _userRepository.GetByVerificationTokenAsync(token);
+        // Tokens are stored hashed — look up by the hash of the incoming raw token
+        var user = await _userRepository.GetByVerificationTokenAsync(HashToken(token));
         if (user == null)
         {
             _logger.LogWarning("Email verification failed: unknown or already-used token");
@@ -311,11 +315,22 @@ public class AuthService : IAuthService
             return;
         }
 
-        user.EmailVerificationToken = GenerateVerificationToken();
+        // Per-account cooldown: silently skip if an email went out < 60s ago
+        // (still responds 200 — no account probing, no cooldown probing)
+        if (user.LastVerificationEmailSentAt.HasValue &&
+            DateTime.UtcNow - user.LastVerificationEmailSentAt.Value < TimeSpan.FromSeconds(60))
+        {
+            _logger.LogInformation("Resend verification for {Email} skipped — within cooldown", email);
+            return;
+        }
+
+        var verificationToken = GenerateVerificationToken();
+        user.EmailVerificationToken = HashToken(verificationToken);
         user.EmailVerificationTokenExpiresAt = DateTime.UtcNow.AddHours(24);
+        user.LastVerificationEmailSentAt = DateTime.UtcNow;
         await _userRepository.UpdateAsync(user);
 
-        await SendVerificationEmailAsync(user);
+        await SendVerificationEmailAsync(user, verificationToken);
         _logger.LogInformation("Verification email re-sent to {Email}", email);
     }
 
@@ -340,47 +355,50 @@ public class AuthService : IAuthService
             throw new InvalidOperationException("Password is incorrect.");
         }
 
-        if (user.Role == UserRole.Admin)
+        // All-or-nothing: the whole cascade commits or rolls back together
+        await _userRepository.ExecuteInTransactionAsync(async () =>
         {
-            var mains = (await _warehouseRepository.GetByOwnerAsync(userId)).ToList();
-
-            // 1. Team accounts assigned to the owner's warehouses (Restrict FK)
-            foreach (var main in mains)
+            if (user.Role == UserRole.Admin)
             {
-                var team = await _userRepository.GetByWarehouseIdAsync(main.Id);
-                foreach (var member in team)
+                var mains = (await _warehouseRepository.GetByOwnerAsync(userId)).ToList();
+
+                // 1. Team accounts assigned to the owner's warehouses (Restrict FK)
+                foreach (var main in mains)
                 {
-                    await _userRepository.DeleteAsync(member.Id);
+                    var team = await _userRepository.GetByWarehouseIdAsync(main.Id);
+                    foreach (var member in team)
+                    {
+                        await _userRepository.DeleteAsync(member.Id);
+                    }
                 }
-            }
 
-            // 2. The owner's product catalog — cascades its items and their transactions
-            var products = (await _productCatalogRepository.GetAllAsync())
-                .Where(p => p.OwnerId == userId)
-                .ToList();
-            foreach (var product in products)
-            {
-                await _productCatalogRepository.DeleteAsync(product.Id);
-            }
-
-            // 3. Sub-warehouses before mains (self-referencing Restrict FK)
-            foreach (var main in mains)
-            {
-                var subs = await _warehouseRepository.GetSubWarehousesAsync(main.Id);
-                foreach (var sub in subs)
+                // 2. The owner's product catalog — cascades its items and their transactions
+                var products = (await _productCatalogRepository.GetByOwnerAsync(userId)).ToList();
+                foreach (var product in products)
                 {
-                    await _warehouseRepository.DeleteAsync(sub.Id);
+                    await _productCatalogRepository.DeleteAsync(product.Id);
                 }
-                await _warehouseRepository.DeleteAsync(main.Id);
+
+                // 3. Sub-warehouses before mains (self-referencing Restrict FK)
+                foreach (var main in mains)
+                {
+                    var subs = await _warehouseRepository.GetSubWarehousesAsync(main.Id);
+                    foreach (var sub in subs)
+                    {
+                        await _warehouseRepository.DeleteAsync(sub.Id);
+                    }
+                    await _warehouseRepository.DeleteAsync(main.Id);
+                }
+
+                _logger.LogInformation(
+                    "Owner {UserId} cascade: {WarehouseCount} main warehouses, {ProductCount} products removed",
+                    userId, mains.Count, products.Count);
             }
 
-            _logger.LogInformation(
-                "Owner {UserId} cascade: {WarehouseCount} main warehouses, {ProductCount} products removed",
-                userId, mains.Count, products.Count);
-        }
+            // 4. The account itself (personal reminders cascade via FK)
+            await _userRepository.DeleteAsync(userId);
+        });
 
-        // 4. The account itself (personal reminders cascade via FK)
-        await _userRepository.DeleteAsync(userId);
         _logger.LogInformation("Account deleted: {UserId} ({Username}, {Role})", userId, user.Username, user.Role);
     }
 
@@ -393,12 +411,22 @@ public class AuthService : IAuthService
     }
 
     /// <summary>
-    /// Composes and sends the verification email with the frontend link.
+    /// SHA-256 of the raw token — only the hash is stored at rest, so a
+    /// database leak cannot be replayed as verification links.
     /// </summary>
-    private async Task SendVerificationEmailAsync(User user)
+    private static string HashToken(string token)
+    {
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
+    }
+
+    /// <summary>
+    /// Composes and sends the verification email with the frontend link.
+    /// The RAW token goes into the link; the DB only holds its hash.
+    /// </summary>
+    private async Task SendVerificationEmailAsync(User user, string rawToken)
     {
         var frontendBaseUrl = _configuration["App:FrontendBaseUrl"] ?? "http://localhost:4200";
-        var link = $"{frontendBaseUrl}/verify-email?token={user.EmailVerificationToken}";
+        var link = $"{frontendBaseUrl}/verify-email?token={rawToken}";
 
         var body =
             $"<h2>Welcome to Warehouse Manager, {user.Username}!</h2>" +

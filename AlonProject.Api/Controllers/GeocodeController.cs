@@ -3,6 +3,7 @@ using System.Text.Json;
 using AlonProject.Application.DTOs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Caching.Memory;
 
 namespace AlonProject.Api.Controllers;
@@ -46,6 +47,7 @@ public class GeocodeController : ControllerBase
     /// <response code="400">Query too short</response>
     /// <response code="502">Geocoding provider unavailable</response>
     [HttpGet]
+    [EnableRateLimiting("geo")]
     public async Task<ActionResult<IEnumerable<GeocodeResultDto>>> Search([FromQuery] string query)
     {
         var term = (query ?? string.Empty).Trim();
@@ -86,7 +88,11 @@ public class GeocodeController : ControllerBase
                 }
             }
 
-            _cache.Set(cacheKey, results, CacheDuration);
+            _cache.Set(cacheKey, results, new MemoryCacheEntryOptions
+            {
+                Size = 1,
+                AbsoluteExpirationRelativeToNow = CacheDuration
+            });
             _logger.LogInformation("Geocoded '{Query}' via Nominatim: {Count} results", term, results.Count);
             return Ok(results);
         }

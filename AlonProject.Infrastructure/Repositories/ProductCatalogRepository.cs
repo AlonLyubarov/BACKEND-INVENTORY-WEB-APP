@@ -29,6 +29,13 @@ public class ProductCatalogRepository : IProductCatalogRepository
         return await _context.ProductCatalogs.ToListAsync();
     }
 
+    public async Task<IEnumerable<ProductCatalog>> GetByOwnerAsync(int ownerId)
+    {
+        return await _context.ProductCatalogs
+            .Where(p => p.OwnerId == ownerId)
+            .ToListAsync();
+    }
+
     public async Task<ProductCatalog> CreateAsync(ProductCatalog entity)
     {
         _context.ProductCatalogs.Add(entity);

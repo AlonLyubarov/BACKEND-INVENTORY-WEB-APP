@@ -72,6 +72,12 @@ public class User
     public DateTime? EmailVerificationTokenExpiresAt { get; set; }
 
     /// <summary>
+    /// When the last verification email was sent (UTC). Used to enforce a
+    /// per-account resend cooldown on top of the per-IP rate limit.
+    /// </summary>
+    public DateTime? LastVerificationEmailSentAt { get; set; }
+
+    /// <summary>
     /// When this user account was created.
     /// </summary>
     public DateTime CreatedAt { get; set; }

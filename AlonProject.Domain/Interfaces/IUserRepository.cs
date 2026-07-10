@@ -59,9 +59,16 @@ public interface IUserRepository
     Task<bool> DeleteAsync(int id);
 
     /// <summary>
-    /// Retrieves a user by their email-verification token.
+    /// Retrieves a user by their email-verification token (SHA-256 hash).
     /// </summary>
     Task<User?> GetByVerificationTokenAsync(string token);
+
+    /// <summary>
+    /// Runs the given work inside a single database transaction.
+    /// All repositories in the same request scope share the DbContext,
+    /// so their writes commit or roll back together.
+    /// </summary>
+    Task ExecuteInTransactionAsync(Func<Task> work);
 
     /// <summary>
     /// Retrieves a user by email address.

@@ -1,6 +1,7 @@
 using AlonProject.Application.DTOs;
 using AlonProject.Application.Interfaces;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace AlonProject.Api.Controllers;
 
@@ -33,6 +34,7 @@ public class AuthController : ControllerBase
     /// <response code="201">Owner and main warehouse successfully created</response>
     /// <response code="400">Invalid registration data or username already taken</response>
     [HttpPost("register")]
+    [EnableRateLimiting("auth")]
     [ProducesResponseType(StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<UserDto>> Register([FromBody] RegisterUserDto dto)
@@ -44,7 +46,7 @@ public class AuthController : ControllerBase
         {
             var user = await _authService.RegisterAsync(dto);
             _logger.LogInformation("API Response: Owner registered successfully - ID: {UserId}, Main warehouse: {WarehouseId}", user.Id, user.WarehouseId);
-            return CreatedAtAction(nameof(Register), new { userId = user.Id }, user);
+            return Created($"/api/users/{user.Id}", user);
         }
         catch (InvalidOperationException ex)
         {
@@ -66,6 +68,7 @@ public class AuthController : ControllerBase
     /// <response code="200">Authentication successful, JWT token returned</response>
     /// <response code="401">Invalid credentials</response>
     [HttpPost("login")]
+    [EnableRateLimiting("auth")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public async Task<ActionResult<AuthResponseDto>> Login([FromBody] LoginDto dto)
@@ -98,6 +101,7 @@ public class AuthController : ControllerBase
     /// <response code="200">Email verified — the user can now sign in</response>
     /// <response code="400">Invalid, used, or expired token</response>
     [HttpPost("verify-email")]
+    [EnableRateLimiting("auth")]
     public async Task<ActionResult> VerifyEmail([FromBody] VerifyEmailDto dto)
     {
         _logger.LogInformation("API Request: POST /api/auth/verify-email");
@@ -119,6 +123,7 @@ public class AuthController : ControllerBase
     /// existence cannot be probed.
     /// </summary>
     [HttpPost("resend-verification")]
+    [EnableRateLimiting("email")]
     public async Task<ActionResult> ResendVerification([FromBody] ResendVerificationDto dto)
     {
         _logger.LogInformation("API Request: POST /api/auth/resend-verification");
