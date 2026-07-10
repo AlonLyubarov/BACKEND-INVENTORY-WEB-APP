@@ -1,7 +1,10 @@
 using System.Globalization;
+using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 using AlonProject.Application.DTOs;
+using AlonProject.Application.Interfaces;
+using AlonProject.Domain.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -23,20 +26,31 @@ namespace AlonProject.Api.Controllers;
 public class RouteController : ControllerBase
 {
     private const string OsrmTripUrl = "https://router.project-osrm.org/trip/v1/driving/";
+    private const string OsrmTableUrl = "https://router.project-osrm.org/table/v1/driving/";
+    private const string OsrmRouteUrl = "https://router.project-osrm.org/route/v1/driving/";
     private const int MaxStops = 12;
     private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(30);
 
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IMemoryCache _cache;
+    private readonly IRouteOptimizerService _optimizer;
+    private readonly IWarehouseRepository _warehouseRepository;
+    private readonly IWarehouseAccessService _accessService;
     private readonly ILogger<RouteController> _logger;
 
     public RouteController(
         IHttpClientFactory httpClientFactory,
         IMemoryCache cache,
+        IRouteOptimizerService optimizer,
+        IWarehouseRepository warehouseRepository,
+        IWarehouseAccessService accessService,
         ILogger<RouteController> logger)
     {
         _httpClientFactory = httpClientFactory;
         _cache = cache;
+        _optimizer = optimizer;
+        _warehouseRepository = warehouseRepository;
+        _accessService = accessService;
         _logger = logger;
     }
 
@@ -165,5 +179,193 @@ public class RouteController : ControllerBase
             points.Add((lat, lng));
         }
         return points;
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    // Smart route optimization (weight-based fuel + inventory urgency)
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// POST api/route/optimize
+    /// Weight- and urgency-aware visiting order: the truck's weight changes at
+    /// every stop, fuel burn depends on the current weight, and urgent stops
+    /// are pushed earlier. Distances come from OSRM's table service (real
+    /// roads); the ordering algorithm (exhaustive / NN+2-opt) is our own.
+    /// </summary>
+    /// <response code="200">Optimized plan + naive baseline for comparison</response>
+    /// <response code="400">Invalid stops, missing coordinates, or no feasible order</response>
+    /// <response code="403">A warehouse is outside the caller's tree</response>
+    /// <response code="502">Routing provider unavailable</response>
+    [HttpPost("optimize")]
+    [EnableRateLimiting("geo")]
+    public async Task<ActionResult<OptimizeRouteResultDto>> Optimize([FromBody] OptimizeRouteRequestDto request)
+    {
+        var idClaim = User.FindFirst(ClaimTypes.NameIdentifier);
+        if (idClaim == null || !int.TryParse(idClaim.Value, out var userId))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Invalid authentication token." });
+        }
+        var role = User.FindFirst(ClaimTypes.Role)?.Value ?? string.Empty;
+        int? userWarehouseId = null;
+        var warehouseClaim = User.FindFirst("WarehouseId");
+        if (warehouseClaim != null && int.TryParse(warehouseClaim.Value, out var parsedWarehouseId))
+        {
+            userWarehouseId = parsedWarehouseId;
+        }
+
+        var allIds = new List<int> { request.DepotWarehouseId };
+        allIds.AddRange(request.Stops.Select(s => s.WarehouseId));
+        if (allIds.Distinct().Count() != allIds.Count)
+        {
+            return BadRequest(new { error = "Each warehouse may appear only once (depot included)." });
+        }
+
+        // SECURITY + coordinates: every node must be accessible and pinned on the map
+        var coordinatesById = new Dictionary<int, (double Lat, double Lng)>();
+        foreach (var id in allIds)
+        {
+            if (!await _accessService.CanAccessWarehouseAsync(id, userId, role, userWarehouseId))
+            {
+                return StatusCode(StatusCodes.Status403Forbidden,
+                    new { error = "One of the warehouses is outside your accessible tree." });
+            }
+
+            var warehouse = await _warehouseRepository.GetByIdAsync(id);
+            if (warehouse == null)
+            {
+                return NotFound(new { error = $"Warehouse {id} not found." });
+            }
+            if (warehouse.Latitude == null || warehouse.Longitude == null)
+            {
+                return BadRequest(new
+                {
+                    error = $"Warehouse '{warehouse.Name}' has no map location. Edit it and pin it on the map first."
+                });
+            }
+            coordinatesById[id] = (warehouse.Latitude.Value, warehouse.Longitude.Value);
+        }
+
+        try
+        {
+            // Matrix order: index 0 = depot, then stops in request order
+            var orderedCoordinates = allIds.Select(id => coordinatesById[id]).ToList();
+            var matrix = await FetchDistanceMatrixKmAsync(orderedCoordinates);
+
+            var result = _optimizer.Optimize(request, matrix);
+
+            // Road geometry for both plans (drawn on the map for comparison)
+            result.Optimized.Geometry = await FetchRouteGeometryAsync(
+                BuildPathCoordinates(request.DepotWarehouseId, result.Optimized.OrderedWarehouseIds, coordinatesById));
+            result.Naive.Geometry = await FetchRouteGeometryAsync(
+                BuildPathCoordinates(request.DepotWarehouseId, result.Naive.OrderedWarehouseIds, coordinatesById));
+
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // No feasible visiting order (capacity violated everywhere)
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Route optimization failed");
+            return StatusCode(StatusCodes.Status502BadGateway,
+                new { error = "Route optimization is temporarily unavailable. Try again shortly." });
+        }
+    }
+
+    private static List<(double Lat, double Lng)> BuildPathCoordinates(
+        int depotId, IEnumerable<int> orderedStopIds, Dictionary<int, (double Lat, double Lng)> coordinatesById)
+    {
+        var path = new List<(double, double)> { coordinatesById[depotId] };
+        path.AddRange(orderedStopIds.Select(id => coordinatesById[id]));
+        return path;
+    }
+
+    /// <summary>
+    /// Full road-distance matrix (km) between all points via OSRM's table
+    /// service. Cached 30 minutes on the normalized coordinate list.
+    /// </summary>
+    private async Task<double[,]> FetchDistanceMatrixKmAsync(IReadOnlyList<(double Lat, double Lng)> points)
+    {
+        var normalized = string.Join(";",
+            points.Select(p =>
+                $"{p.Lat.ToString("F5", CultureInfo.InvariantCulture)},{p.Lng.ToString("F5", CultureInfo.InvariantCulture)}"));
+        var cacheKey = $"matrix:{normalized}";
+        if (_cache.TryGetValue(cacheKey, out double[,]? cachedMatrix) && cachedMatrix != null)
+        {
+            return cachedMatrix;
+        }
+
+        var coordinates = string.Join(";",
+            points.Select(p =>
+                $"{p.Lng.ToString(CultureInfo.InvariantCulture)},{p.Lat.ToString(CultureInfo.InvariantCulture)}"));
+        var url = $"{OsrmTableUrl}{coordinates}?annotations=distance";
+
+        var client = _httpClientFactory.CreateClient("osrm");
+        using var response = await client.GetAsync(url);
+        response.EnsureSuccessStatusCode();
+
+        await using var stream = await response.Content.ReadAsStreamAsync();
+        using var json = await JsonDocument.ParseAsync(stream);
+        var root = json.RootElement;
+        if (root.GetProperty("code").GetString() != "Ok")
+        {
+            throw new HttpRequestException("OSRM table service returned a non-Ok response.");
+        }
+
+        var distances = root.GetProperty("distances");
+        var n = points.Count;
+        var matrix = new double[n, n];
+        var row = 0;
+        foreach (var rowElement in distances.EnumerateArray())
+        {
+            var col = 0;
+            foreach (var cell in rowElement.EnumerateArray())
+            {
+                if (cell.ValueKind == JsonValueKind.Null)
+                {
+                    throw new HttpRequestException("No drivable road between two of the warehouses.");
+                }
+                matrix[row, col] = cell.GetDouble() / 1000.0; // meters → km
+                col++;
+            }
+            row++;
+        }
+
+        _cache.Set(cacheKey, matrix, new MemoryCacheEntryOptions
+        {
+            Size = 1,
+            AbsoluteExpirationRelativeToNow = CacheDuration
+        });
+        return matrix;
+    }
+
+    /// <summary>Road geometry ([lat, lng] pairs) for a fixed point sequence via OSRM route.</summary>
+    private async Task<List<double[]>> FetchRouteGeometryAsync(IReadOnlyList<(double Lat, double Lng)> path)
+    {
+        var coordinates = string.Join(";",
+            path.Select(p =>
+                $"{p.Lng.ToString(CultureInfo.InvariantCulture)},{p.Lat.ToString(CultureInfo.InvariantCulture)}"));
+        var url = $"{OsrmRouteUrl}{coordinates}?overview=full&geometries=geojson";
+
+        var client = _httpClientFactory.CreateClient("osrm");
+        using var response = await client.GetAsync(url);
+        response.EnsureSuccessStatusCode();
+
+        await using var stream = await response.Content.ReadAsStreamAsync();
+        using var json = await JsonDocument.ParseAsync(stream);
+        var root = json.RootElement;
+        if (root.GetProperty("code").GetString() != "Ok")
+        {
+            throw new HttpRequestException("OSRM route service returned a non-Ok response.");
+        }
+
+        var geometry = new List<double[]>();
+        foreach (var coordinate in root.GetProperty("routes")[0].GetProperty("geometry").GetProperty("coordinates").EnumerateArray())
+        {
+            geometry.Add(new[] { coordinate[1].GetDouble(), coordinate[0].GetDouble() });
+        }
+        return geometry;
     }
 }

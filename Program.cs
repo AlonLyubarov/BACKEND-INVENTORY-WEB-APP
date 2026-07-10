@@ -99,6 +99,7 @@ try
     builder.Services.AddScoped<IUserRepository, UserRepository>();
     builder.Services.AddScoped<IWarehouseRepository, WarehouseRepository>();
     builder.Services.AddScoped<IReminderRepository, ReminderRepository>();
+    builder.Services.AddScoped<IShiftRepository, ShiftRepository>();
     Log.Information("Repository dependencies registered");
 
     // Service dependency injection - Register business logic layer
@@ -110,6 +111,8 @@ try
     builder.Services.AddScoped<IWarehouseAccessService, WarehouseAccessService>();
     builder.Services.AddScoped<IReminderService, ReminderService>();
     builder.Services.AddScoped<IEmailSender, SmtpEmailSender>();
+    builder.Services.AddScoped<IRouteOptimizerService, RouteOptimizerService>();
+    builder.Services.AddScoped<IShiftService, ShiftService>();
     Log.Information("Application services registered");
 
     // Geocoding proxy: named HttpClient with the User-Agent Nominatim's usage

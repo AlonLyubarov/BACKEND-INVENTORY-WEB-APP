@@ -15,6 +15,7 @@ public class AppDbContext : DbContext
     public DbSet<Transaction> Transactions { get; set; }
     public DbSet<Warehouse> Warehouses { get; set; }
     public DbSet<User> Users { get; set; }
+    public DbSet<Shift> Shifts { get; set; }
     public DbSet<Reminder> Reminders { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -102,6 +103,28 @@ public class AppDbContext : DbContext
 
             // Users assigned to this warehouse
             entity.HasMany(e => e.Users).WithOne(u => u.Warehouse).HasForeignKey(u => u.WarehouseId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // Shift (work schedule) configuration
+        modelBuilder.Entity<Shift>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Notes).HasMaxLength(300);
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
+            // Schedule lookups are per user or per warehouse, by date
+            entity.HasIndex(e => new { e.UserId, e.Date });
+            entity.HasIndex(e => new { e.WarehouseId, e.Date });
+            // Removing a user removes their shifts
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+            // Restrict here is safe: a warehouse can only be deleted once it has
+            // no users, and by then all its shifts were cascaded away with them
+            entity.HasOne(e => e.Warehouse)
+                .WithMany()
+                .HasForeignKey(e => e.WarehouseId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         // Reminder configuration
