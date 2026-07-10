@@ -118,7 +118,12 @@ try
         client.Timeout = TimeSpan.FromSeconds(8);
         client.DefaultRequestHeaders.UserAgent.ParseAdd("AlonProject-Inventory/1.0 (alonu4@gmail.com)");
     });
-    Log.Information("Geocoding HTTP client registered");
+    builder.Services.AddHttpClient("osrm", client =>
+    {
+        client.Timeout = TimeSpan.FromSeconds(10);
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("AlonProject-Inventory/1.0 (alonu4@gmail.com)");
+    });
+    Log.Information("Geocoding and routing HTTP clients registered");
 
     // CORS configuration - Allow Angular frontend on port 4200
     builder.Services.AddCors(options =>
