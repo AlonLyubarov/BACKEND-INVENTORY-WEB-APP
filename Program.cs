@@ -97,6 +97,7 @@ try
     builder.Services.AddScoped<ITransactionRepository, TransactionRepository>();
     builder.Services.AddScoped<IUserRepository, UserRepository>();
     builder.Services.AddScoped<IWarehouseRepository, WarehouseRepository>();
+    builder.Services.AddScoped<IReminderRepository, ReminderRepository>();
     Log.Information("Repository dependencies registered");
 
     // Service dependency injection - Register business logic layer
@@ -106,6 +107,7 @@ try
     builder.Services.AddScoped<IAuthService, AuthService>();
     builder.Services.AddScoped<IWarehouseService, WarehouseService>();
     builder.Services.AddScoped<IWarehouseAccessService, WarehouseAccessService>();
+    builder.Services.AddScoped<IReminderService, ReminderService>();
     Log.Information("Application services registered");
 
     // CORS configuration - Allow Angular frontend on port 4200

@@ -15,6 +15,7 @@ public class AppDbContext : DbContext
     public DbSet<Transaction> Transactions { get; set; }
     public DbSet<Warehouse> Warehouses { get; set; }
     public DbSet<User> Users { get; set; }
+    public DbSet<Reminder> Reminders { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -94,6 +95,22 @@ public class AppDbContext : DbContext
 
             // Users assigned to this warehouse
             entity.HasMany(e => e.Users).WithOne(u => u.Warehouse).HasForeignKey(u => u.WarehouseId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // Reminder configuration
+        modelBuilder.Entity<Reminder>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Title).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Notes).HasMaxLength(500);
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
+            // Calendar lookups are always per user, usually per date range
+            entity.HasIndex(e => new { e.UserId, e.Date });
+            // Deleting a user removes their personal reminders with them
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         // User configuration
