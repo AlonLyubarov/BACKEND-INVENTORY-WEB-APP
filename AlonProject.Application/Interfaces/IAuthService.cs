@@ -48,6 +48,16 @@ public interface IAuthService
     Task ResendVerificationAsync(string email);
 
     /// <summary>
+    /// Permanently deletes the caller's account after password confirmation.
+    /// For owners (Admin) this cascades to EVERYTHING they own: warehouses,
+    /// sub-warehouses, items, transactions, their product catalog, and all
+    /// team accounts invited into their warehouses.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Password incorrect</exception>
+    /// <exception cref="KeyNotFoundException">User not found</exception>
+    Task DeleteAccountAsync(int userId, string password);
+
+    /// <summary>
     /// Generates a new JWT token for an existing user.
     /// Used after role changes or warehouse assignments to refresh claims in the token.
     /// SECURITY: This prevents stale claims from blocking user access to newly assigned resources.

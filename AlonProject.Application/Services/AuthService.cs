@@ -21,17 +21,23 @@ namespace AlonProject.Application.Services;
 public class AuthService : IAuthService
 {
     private readonly IUserRepository _userRepository;
+    private readonly IWarehouseRepository _warehouseRepository;
+    private readonly IProductCatalogRepository _productCatalogRepository;
     private readonly IConfiguration _configuration;
     private readonly IEmailSender _emailSender;
     private readonly ILogger<AuthService> _logger;
 
     public AuthService(
         IUserRepository userRepository,
+        IWarehouseRepository warehouseRepository,
+        IProductCatalogRepository productCatalogRepository,
         IConfiguration configuration,
         IEmailSender emailSender,
         ILogger<AuthService> logger)
     {
         _userRepository = userRepository;
+        _warehouseRepository = warehouseRepository;
+        _productCatalogRepository = productCatalogRepository;
         _configuration = configuration;
         _emailSender = emailSender;
         _logger = logger;
@@ -311,6 +317,71 @@ public class AuthService : IAuthService
 
         await SendVerificationEmailAsync(user);
         _logger.LogInformation("Verification email re-sent to {Email}", email);
+    }
+
+    /// <summary>
+    /// Permanently deletes the caller's account after password confirmation.
+    /// Owners take their whole tree with them: team accounts first (Restrict FK),
+    /// then their product catalog (cascades items + transactions), then
+    /// sub-warehouses and main warehouses (cascades remaining items), and
+    /// finally the account itself (reminders cascade).
+    /// </summary>
+    public async Task DeleteAccountAsync(int userId, string password)
+    {
+        var user = await _userRepository.GetByIdAsync(userId);
+        if (user == null)
+        {
+            throw new KeyNotFoundException("User not found.");
+        }
+
+        if (!BC.Verify(password, user.PasswordHash))
+        {
+            _logger.LogWarning("Account deletion refused: wrong password for user {UserId}", userId);
+            throw new InvalidOperationException("Password is incorrect.");
+        }
+
+        if (user.Role == UserRole.Admin)
+        {
+            var mains = (await _warehouseRepository.GetByOwnerAsync(userId)).ToList();
+
+            // 1. Team accounts assigned to the owner's warehouses (Restrict FK)
+            foreach (var main in mains)
+            {
+                var team = await _userRepository.GetByWarehouseIdAsync(main.Id);
+                foreach (var member in team)
+                {
+                    await _userRepository.DeleteAsync(member.Id);
+                }
+            }
+
+            // 2. The owner's product catalog — cascades its items and their transactions
+            var products = (await _productCatalogRepository.GetAllAsync())
+                .Where(p => p.OwnerId == userId)
+                .ToList();
+            foreach (var product in products)
+            {
+                await _productCatalogRepository.DeleteAsync(product.Id);
+            }
+
+            // 3. Sub-warehouses before mains (self-referencing Restrict FK)
+            foreach (var main in mains)
+            {
+                var subs = await _warehouseRepository.GetSubWarehousesAsync(main.Id);
+                foreach (var sub in subs)
+                {
+                    await _warehouseRepository.DeleteAsync(sub.Id);
+                }
+                await _warehouseRepository.DeleteAsync(main.Id);
+            }
+
+            _logger.LogInformation(
+                "Owner {UserId} cascade: {WarehouseCount} main warehouses, {ProductCount} products removed",
+                userId, mains.Count, products.Count);
+        }
+
+        // 4. The account itself (personal reminders cascade via FK)
+        await _userRepository.DeleteAsync(userId);
+        _logger.LogInformation("Account deleted: {UserId} ({Username}, {Role})", userId, user.Username, user.Role);
     }
 
     /// <summary>
