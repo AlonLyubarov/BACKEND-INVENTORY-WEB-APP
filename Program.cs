@@ -7,6 +7,7 @@ using AlonProject.Application.Interfaces;
 using AlonProject.Application.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.AspNetCore.RateLimiting;
 using Serilog;
@@ -242,7 +243,41 @@ try
 
     var app = builder.Build();
 
+    // Apply EF migrations at startup so a fresh database (e.g. an empty SQL
+    // Server container) is created and up to date. Retries because SQL Server
+    // may take a few seconds to accept connections after the container starts.
+    using (var scope = app.Services.CreateScope())
+    {
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        for (var attempt = 1; attempt <= 12; attempt++)
+        {
+            try
+            {
+                db.Database.Migrate();
+                Log.Information("Database migrations applied");
+                break;
+            }
+            catch (Exception ex) when (attempt < 12)
+            {
+                Log.Warning("Database not ready (attempt {Attempt}/12): {Message}. Retrying in 5s...",
+                    attempt, ex.Message);
+                await Task.Delay(TimeSpan.FromSeconds(5));
+            }
+        }
+    }
+
     Log.Information("=== Configuring HTTP request pipeline ===");
+
+    // Behind a reverse proxy (nginx): trust its forwarded headers so the real
+    // client IP (used by the rate limiter) and scheme are honored.
+    var forwardedOptions = new ForwardedHeadersOptions
+    {
+        ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
+    };
+    // Trust the reverse proxy inside the private compose network
+    forwardedOptions.KnownNetworks.Clear();
+    forwardedOptions.KnownProxies.Clear();
+    app.UseForwardedHeaders(forwardedOptions);
 
     // Configure the HTTP request pipeline
     if (app.Environment.IsDevelopment())
@@ -252,7 +287,11 @@ try
         app.MapScalarApiReference();
     }
 
-    if (!app.Environment.IsDevelopment())
+    // In a container the app serves plain HTTP behind nginx (which terminates
+    // TLS), so an HTTPS redirect here would break requests. The official .NET
+    // images set DOTNET_RUNNING_IN_CONTAINER=true.
+    var runningInContainer = builder.Configuration.GetValue<bool>("DOTNET_RUNNING_IN_CONTAINER");
+    if (!app.Environment.IsDevelopment() && !runningInContainer)
     {
         app.UseHttpsRedirection();
     }

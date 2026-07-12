@@ -1,0 +1,20 @@
+# Build artifacts
+**/bin
+**/obj
+out-tsc
+
+# Secrets — NEVER copy into the image
+.env
+.env.local
+
+# Local dev files
+.vs
+.vscode
+logs
+*.user
+*.suo
+
+# Git & docs
+.git
+.gitignore
+README.md

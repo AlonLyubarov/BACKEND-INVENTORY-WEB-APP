@@ -234,8 +234,12 @@ public class AuthService : IAuthService
             throw new UnauthorizedAccessException("Invalid username or password.");
         }
 
-        // SECURITY: the email must be proven before the account can be used
-        if (!user.EmailVerified)
+        // SECURITY: the email must be proven before the account can be used.
+        // Gated by config so environments without a real SMTP sender (e.g. a local
+        // log-only demo, where users never receive the link) can turn the requirement
+        // off. Defaults to true (enforced) when the key is absent — production stays safe.
+        var requireEmailVerification = !bool.TryParse(_configuration["Auth:RequireEmailVerification"], out var parsedRequire) || parsedRequire;
+        if (requireEmailVerification && !user.EmailVerified)
         {
             _logger.LogWarning("Auth Login Failed: Email not verified for username: {Username}", dto.Username);
             throw new UnauthorizedAccessException("Your email is not verified yet. Check your inbox for the verification link.");
