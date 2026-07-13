@@ -6,7 +6,7 @@
 		<ImplicitUsings>enable</ImplicitUsings>
 		<GenerateAssemblyInfo>false</GenerateAssemblyInfo>
 		<GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
-		<DefaultItemExcludes>$(DefaultItemExcludes);AlonProject.Domain\**;AlonProject.Application\**;AlonProject.Infrastructure\**</DefaultItemExcludes>
+		<DefaultItemExcludes>$(DefaultItemExcludes);AlonProject.Domain\**;AlonProject.Application\**;AlonProject.Infrastructure\**;AlonProject.Tests\**</DefaultItemExcludes>
 	  <UserSecretsId>1df470f7-ae31-4eda-8996-9f579fe85708</UserSecretsId>
   </PropertyGroup>
 

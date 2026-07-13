@@ -100,6 +100,7 @@ try
     builder.Services.AddScoped<IUserRepository, UserRepository>();
     builder.Services.AddScoped<IWarehouseRepository, WarehouseRepository>();
     builder.Services.AddScoped<IReminderRepository, ReminderRepository>();
+    builder.Services.AddScoped<IPersonalTaskRepository, PersonalTaskRepository>();
     builder.Services.AddScoped<IShiftRepository, ShiftRepository>();
     Log.Information("Repository dependencies registered");
 
@@ -111,6 +112,7 @@ try
     builder.Services.AddScoped<IWarehouseService, WarehouseService>();
     builder.Services.AddScoped<IWarehouseAccessService, WarehouseAccessService>();
     builder.Services.AddScoped<IReminderService, ReminderService>();
+    builder.Services.AddScoped<IPersonalTaskService, PersonalTaskService>();
     builder.Services.AddScoped<IEmailSender, SmtpEmailSender>();
     builder.Services.AddScoped<IRouteOptimizerService, RouteOptimizerService>();
     builder.Services.AddScoped<IShiftService, ShiftService>();
@@ -249,19 +251,29 @@ try
     using (var scope = app.Services.CreateScope())
     {
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        for (var attempt = 1; attempt <= 12; attempt++)
+        if (!db.Database.IsRelational())
         {
-            try
+            // Integration tests swap in the EF in-memory provider, which has no
+            // migrations — build the schema directly. Never used in production.
+            db.Database.EnsureCreated();
+            Log.Information("Non-relational database schema created (in-memory provider)");
+        }
+        else
+        {
+            for (var attempt = 1; attempt <= 12; attempt++)
             {
-                db.Database.Migrate();
-                Log.Information("Database migrations applied");
-                break;
-            }
-            catch (Exception ex) when (attempt < 12)
-            {
-                Log.Warning("Database not ready (attempt {Attempt}/12): {Message}. Retrying in 5s...",
-                    attempt, ex.Message);
-                await Task.Delay(TimeSpan.FromSeconds(5));
+                try
+                {
+                    db.Database.Migrate();
+                    Log.Information("Database migrations applied");
+                    break;
+                }
+                catch (Exception ex) when (attempt < 12)
+                {
+                    Log.Warning("Database not ready (attempt {Attempt}/12): {Message}. Retrying in 5s...",
+                        attempt, ex.Message);
+                    await Task.Delay(TimeSpan.FromSeconds(5));
+                }
             }
         }
     }
@@ -275,7 +287,7 @@ try
         ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
     };
     // Trust the reverse proxy inside the private compose network
-    forwardedOptions.KnownNetworks.Clear();
+    forwardedOptions.KnownIPNetworks.Clear();
     forwardedOptions.KnownProxies.Clear();
     app.UseForwardedHeaders(forwardedOptions);
 
@@ -300,9 +312,14 @@ try
     app.UseCors("AllowAngularApp");
     Log.Information("CORS middleware enabled");
 
-    // Rate limiting middleware — policies applied per-endpoint via [EnableRateLimiting]
-    app.UseRateLimiter();
-    Log.Information("Rate limiting middleware enabled");
+    // Rate limiting middleware — policies applied per-endpoint via [EnableRateLimiting].
+    // Skipped under the integration-test host so a test run's rapid auth calls are
+    // not throttled; the [EnableRateLimiting] attributes are inert without this.
+    if (!app.Environment.IsEnvironment("Testing"))
+    {
+        app.UseRateLimiter();
+        Log.Information("Rate limiting middleware enabled");
+    }
 
     // Authentication middleware - must come before UseAuthorization
     app.UseAuthentication();
@@ -314,7 +331,10 @@ try
     Log.Information("=== Application fully configured and starting ===");
     await app.RunAsync();
 }
-catch (Exception ex)
+// Let the host-control sentinels (thrown by WebApplicationFactory's HostFactoryResolver
+// to stop the app right after the host is built, and by graceful shutdown) propagate —
+// swallowing them here would break integration tests with "never built an IHost".
+catch (Exception ex) when (ex.GetType().Name is not "StopTheHostException" and not "HostAbortedException")
 {
     Log.Fatal(ex, "=== Application terminated unexpectedly ===");
 }
@@ -323,3 +343,7 @@ finally
     Log.Information("=== Application shutdown ===");
     await Log.CloseAndFlushAsync();
 }
+
+// Exposes the implicit top-level Program class to the integration test project
+// (WebApplicationFactory<Program>). Has no effect on normal execution.
+public partial class Program { }

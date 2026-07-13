@@ -17,6 +17,7 @@ public class AppDbContext : DbContext
     public DbSet<User> Users { get; set; }
     public DbSet<Shift> Shifts { get; set; }
     public DbSet<Reminder> Reminders { get; set; }
+    public DbSet<PersonalTask> PersonalTasks { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -137,6 +138,22 @@ public class AppDbContext : DbContext
             // Calendar lookups are always per user, usually per date range
             entity.HasIndex(e => new { e.UserId, e.Date });
             // Deleting a user removes their personal reminders with them
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // PersonalTask configuration
+        modelBuilder.Entity<PersonalTask>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Title).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Notes).HasMaxLength(1000);
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
+            // The task list is always fetched per user
+            entity.HasIndex(e => new { e.UserId, e.IsCompleted });
+            // Deleting a user removes their personal tasks with them
             entity.HasOne(e => e.User)
                 .WithMany()
                 .HasForeignKey(e => e.UserId)
