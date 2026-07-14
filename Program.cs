@@ -101,6 +101,7 @@ try
     builder.Services.AddScoped<IWarehouseRepository, WarehouseRepository>();
     builder.Services.AddScoped<IReminderRepository, ReminderRepository>();
     builder.Services.AddScoped<IPersonalTaskRepository, PersonalTaskRepository>();
+    builder.Services.AddScoped<IRefreshTokenRepository, RefreshTokenRepository>();
     builder.Services.AddScoped<IShiftRepository, ShiftRepository>();
     Log.Information("Repository dependencies registered");
 

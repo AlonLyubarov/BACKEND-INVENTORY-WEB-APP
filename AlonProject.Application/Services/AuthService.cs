@@ -23,14 +23,19 @@ public class AuthService : IAuthService
     private readonly IUserRepository _userRepository;
     private readonly IWarehouseRepository _warehouseRepository;
     private readonly IProductCatalogRepository _productCatalogRepository;
+    private readonly IRefreshTokenRepository _refreshTokenRepository;
     private readonly IConfiguration _configuration;
     private readonly IEmailSender _emailSender;
     private readonly ILogger<AuthService> _logger;
+
+    /// <summary>How long a refresh token stays valid.</summary>
+    private static readonly TimeSpan RefreshTokenLifetime = TimeSpan.FromDays(7);
 
     public AuthService(
         IUserRepository userRepository,
         IWarehouseRepository warehouseRepository,
         IProductCatalogRepository productCatalogRepository,
+        IRefreshTokenRepository refreshTokenRepository,
         IConfiguration configuration,
         IEmailSender emailSender,
         ILogger<AuthService> logger)
@@ -38,6 +43,7 @@ public class AuthService : IAuthService
         _userRepository = userRepository;
         _warehouseRepository = warehouseRepository;
         _productCatalogRepository = productCatalogRepository;
+        _refreshTokenRepository = refreshTokenRepository;
         _configuration = configuration;
         _emailSender = emailSender;
         _logger = logger;
@@ -247,23 +253,11 @@ public class AuthService : IAuthService
 
         try
         {
-            // Generate JWT token
-            var token = GenerateJwtToken(user);
-
             _logger.LogInformation("Auth Login Success: User authenticated - ID: {UserId}, Username: {Username}, Role: {Role}",
                 user.Id, user.Username, user.Role);
 
-            // Return authentication response
-            var expiresAt = DateTime.UtcNow.AddHours(1);
-            return new AuthResponseDto
-            {
-                Token = token,
-                Username = user.Username,
-                Role = user.Role.ToString(),
-                ExpiresAt = expiresAt,
-                UserId = user.Id,
-                WarehouseId = user.WarehouseId
-            };
+            // Issue a short-lived access token + a long-lived refresh token
+            return await BuildAuthResponseAsync(user);
         }
         catch (Exception ex)
         {
@@ -271,6 +265,87 @@ public class AuthService : IAuthService
                 dto.Username);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Exchanges a valid refresh token for a fresh access token, rotating the
+    /// refresh token: the presented one is revoked and a new one is issued.
+    /// </summary>
+    public async Task<AuthResponseDto> RefreshAsync(string refreshToken)
+    {
+        if (string.IsNullOrWhiteSpace(refreshToken))
+        {
+            throw new UnauthorizedAccessException("Invalid refresh token.");
+        }
+
+        var stored = await _refreshTokenRepository.GetByHashAsync(HashToken(refreshToken));
+        if (stored == null || !stored.IsActive)
+        {
+            _logger.LogWarning("Refresh failed: unknown, expired, or revoked token");
+            throw new UnauthorizedAccessException("Refresh token is invalid or expired. Please sign in again.");
+        }
+
+        // Rotation: burn the presented token so it cannot be reused
+        stored.RevokedAt = DateTime.UtcNow;
+        await _refreshTokenRepository.UpdateAsync(stored);
+
+        var user = await _userRepository.GetByIdAsync(stored.UserId);
+        if (user == null)
+        {
+            _logger.LogWarning("Refresh failed: user {UserId} no longer exists", stored.UserId);
+            throw new UnauthorizedAccessException("Account no longer exists.");
+        }
+
+        _logger.LogInformation("Access token refreshed for user {UserId} ({Username})", user.Id, user.Username);
+        return await BuildAuthResponseAsync(user);
+    }
+
+    /// <summary>
+    /// Revokes a refresh token (logout). Unknown tokens are ignored — the caller
+    /// always sees success, so a token cannot be probed for validity.
+    /// </summary>
+    public async Task RevokeRefreshTokenAsync(string refreshToken)
+    {
+        if (string.IsNullOrWhiteSpace(refreshToken))
+        {
+            return;
+        }
+
+        var stored = await _refreshTokenRepository.GetByHashAsync(HashToken(refreshToken));
+        if (stored != null && stored.RevokedAt == null)
+        {
+            stored.RevokedAt = DateTime.UtcNow;
+            await _refreshTokenRepository.UpdateAsync(stored);
+            _logger.LogInformation("Refresh token revoked (logout) for user {UserId}", stored.UserId);
+        }
+    }
+
+    /// <summary>
+    /// Builds an auth response: a fresh 1-hour access token plus a newly stored
+    /// refresh token (only its hash is persisted; the raw value is returned once).
+    /// </summary>
+    private async Task<AuthResponseDto> BuildAuthResponseAsync(User user)
+    {
+        var accessToken = GenerateJwtToken(user);
+        var rawRefreshToken = GenerateVerificationToken(); // 32 cryptographically-random bytes
+
+        await _refreshTokenRepository.CreateAsync(new RefreshToken
+        {
+            UserId = user.Id,
+            TokenHash = HashToken(rawRefreshToken),
+            ExpiresAt = DateTime.UtcNow.Add(RefreshTokenLifetime)
+        });
+
+        return new AuthResponseDto
+        {
+            Token = accessToken,
+            RefreshToken = rawRefreshToken,
+            Username = user.Username,
+            Role = user.Role.ToString(),
+            ExpiresAt = DateTime.UtcNow.AddHours(1),
+            UserId = user.Id,
+            WarehouseId = user.WarehouseId
+        };
     }
 
     /// <summary>

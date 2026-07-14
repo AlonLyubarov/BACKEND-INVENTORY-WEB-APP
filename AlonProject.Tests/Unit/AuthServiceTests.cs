@@ -23,6 +23,7 @@ public class AuthServiceTests
     private readonly IUserRepository _userRepo = Substitute.For<IUserRepository>();
     private readonly IWarehouseRepository _whRepo = Substitute.For<IWarehouseRepository>();
     private readonly IProductCatalogRepository _catalogRepo = Substitute.For<IProductCatalogRepository>();
+    private readonly IRefreshTokenRepository _refreshRepo = Substitute.For<IRefreshTokenRepository>();
     private readonly IEmailSender _email = Substitute.For<IEmailSender>();
 
     private static IConfiguration Config(bool requireVerification) =>
@@ -35,7 +36,7 @@ public class AuthServiceTests
         }).Build();
 
     private AuthService NewService(bool requireVerification = true) =>
-        new(_userRepo, _whRepo, _catalogRepo, Config(requireVerification), _email,
+        new(_userRepo, _whRepo, _catalogRepo, _refreshRepo, Config(requireVerification), _email,
             NullLogger<AuthService>.Instance);
 
     private static RegisterUserDto ValidRegistration() => new()
@@ -251,6 +252,97 @@ public class AuthServiceTests
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             NewService().DeleteAccountAsync(userId: 1, password: "wrong"));
         await _userRepo.DidNotReceive().DeleteAsync(Arg.Any<int>());
+    }
+
+    // ── Refresh tokens ───────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task LoginAsync_IssuesAndStoresARefreshToken()
+    {
+        _userRepo.GetByUsernameAsync("alice").Returns(StoredUser("alice", "secret", verified: true));
+
+        var result = await NewService()
+            .LoginAsync(new LoginDto { Username = "alice", Password = "secret" });
+
+        Assert.False(string.IsNullOrEmpty(result.RefreshToken));
+        // The raw token is returned but only its hash is persisted
+        await _refreshRepo.Received(1).CreateAsync(Arg.Is<RefreshToken>(t =>
+            t.UserId == 1 && t.TokenHash != result.RefreshToken && t.ExpiresAt > DateTime.UtcNow));
+    }
+
+    [Fact]
+    public async Task RefreshAsync_ValidToken_RotatesAndReturnsNewTokens()
+    {
+        var raw = "raw-refresh-token";
+        var stored = new RefreshToken
+        {
+            Id = 10,
+            UserId = 1,
+            TokenHash = Hash(raw),
+            ExpiresAt = DateTime.UtcNow.AddDays(7)
+        };
+        _refreshRepo.GetByHashAsync(Hash(raw)).Returns(stored);
+        _userRepo.GetByIdAsync(1).Returns(StoredUser("alice", "secret", verified: true));
+
+        var result = await NewService().RefreshAsync(raw);
+
+        Assert.False(string.IsNullOrEmpty(result.Token));
+        Assert.False(string.IsNullOrEmpty(result.RefreshToken));
+        Assert.NotEqual(raw, result.RefreshToken);        // rotated
+        Assert.NotNull(stored.RevokedAt);                 // old one burned
+        await _refreshRepo.Received(1).CreateAsync(Arg.Any<RefreshToken>()); // new one stored
+    }
+
+    [Fact]
+    public async Task RefreshAsync_UnknownToken_ThrowsUnauthorized()
+    {
+        _refreshRepo.GetByHashAsync(Arg.Any<string>()).Returns((RefreshToken?)null);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => NewService().RefreshAsync("nope"));
+    }
+
+    [Fact]
+    public async Task RefreshAsync_ExpiredToken_ThrowsUnauthorized()
+    {
+        var raw = "raw-refresh-token";
+        _refreshRepo.GetByHashAsync(Hash(raw)).Returns(new RefreshToken
+        {
+            UserId = 1,
+            TokenHash = Hash(raw),
+            ExpiresAt = DateTime.UtcNow.AddDays(-1) // expired
+        });
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => NewService().RefreshAsync(raw));
+    }
+
+    [Fact]
+    public async Task RefreshAsync_RevokedToken_ThrowsUnauthorized()
+    {
+        var raw = "raw-refresh-token";
+        _refreshRepo.GetByHashAsync(Hash(raw)).Returns(new RefreshToken
+        {
+            UserId = 1,
+            TokenHash = Hash(raw),
+            ExpiresAt = DateTime.UtcNow.AddDays(7),
+            RevokedAt = DateTime.UtcNow.AddMinutes(-5) // already used/revoked
+        });
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => NewService().RefreshAsync(raw));
+    }
+
+    [Fact]
+    public async Task RevokeRefreshTokenAsync_MarksActiveTokenRevoked()
+    {
+        var raw = "raw-refresh-token";
+        var stored = new RefreshToken
+        {
+            UserId = 1,
+            TokenHash = Hash(raw),
+            ExpiresAt = DateTime.UtcNow.AddDays(7)
+        };
+        _refreshRepo.GetByHashAsync(Hash(raw)).Returns(stored);
+
+        await NewService().RevokeRefreshTokenAsync(raw);
+
+        Assert.NotNull(stored.RevokedAt);
+        await _refreshRepo.Received(1).UpdateAsync(stored);
     }
 
     private static string Hash(string token) =>

@@ -138,4 +138,42 @@ public class AuthController : ControllerBase
         }
         return Ok(new { message = "If that email belongs to an unverified account, a new link was sent." });
     }
+
+    /// <summary>
+    /// POST api/auth/refresh
+    /// Exchanges a valid refresh token for a new access token (and a rotated
+    /// refresh token). Lets the client stay signed in past the access token's
+    /// 1-hour expiry without re-entering credentials.
+    /// </summary>
+    /// <response code="200">New access + refresh token returned</response>
+    /// <response code="401">Refresh token invalid, expired, or already used</response>
+    [HttpPost("refresh")]
+    [EnableRateLimiting("auth")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<ActionResult<AuthResponseDto>> Refresh([FromBody] RefreshTokenRequestDto dto)
+    {
+        try
+        {
+            var response = await _authService.RefreshAsync(dto.RefreshToken);
+            return Ok(response);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            _logger.LogWarning("API Error: Token refresh failed");
+            return Unauthorized(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// POST api/auth/logout
+    /// Revokes the given refresh token. Always returns 200 (an unknown token is
+    /// treated the same as a valid one — no probing).
+    /// </summary>
+    [HttpPost("logout")]
+    public async Task<ActionResult> Logout([FromBody] RefreshTokenRequestDto dto)
+    {
+        await _authService.RevokeRefreshTokenAsync(dto.RefreshToken);
+        return Ok(new { message = "Logged out." });
+    }
 }

@@ -35,6 +35,21 @@ public interface IAuthService
     Task<DTOs.AuthResponseDto> LoginAsync(DTOs.LoginDto dto);
 
     /// <summary>
+    /// Exchanges a valid refresh token for a fresh access token, ROTATING the
+    /// refresh token (the old one is revoked and a new one issued).
+    /// </summary>
+    /// <param name="refreshToken">The raw refresh token the client holds.</param>
+    /// <returns>A new AuthResponseDto with a new access token and refresh token.</returns>
+    /// <exception cref="UnauthorizedAccessException">Token unknown, expired, or already used.</exception>
+    Task<DTOs.AuthResponseDto> RefreshAsync(string refreshToken);
+
+    /// <summary>
+    /// Revokes a refresh token (logout). Always succeeds silently — an unknown
+    /// token is treated the same as a revoked one, no probing.
+    /// </summary>
+    Task RevokeRefreshTokenAsync(string refreshToken);
+
+    /// <summary>
     /// Verifies a user's email using the one-time token from the email link.
     /// </summary>
     /// <param name="token">Verification token from the email link</param>

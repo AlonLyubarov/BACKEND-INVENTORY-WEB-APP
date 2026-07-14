@@ -104,6 +104,49 @@ public class AuthApiTests : IClassFixture<CustomWebApplicationFactory>
     }
 
     [Fact]
+    public async Task Refresh_WithValidRefreshToken_ReturnsNewTokens()
+    {
+        var client = _factory.CreateClient();
+        await client.PostAsJsonAsync("/api/auth/register", Registration("refresh1"));
+        var login = await client.PostAsJsonAsync("/api/auth/login", new
+        {
+            username = "owner_refresh1",
+            password = "Str0ng_Pass!"
+        });
+        var loginBody = await login.Content.ReadFromJsonAsync<JsonElement>();
+        var refreshToken = loginBody.GetProperty("refreshToken").GetString();
+
+        var response = await client.PostAsJsonAsync("/api/auth/refresh", new { refreshToken });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(string.IsNullOrWhiteSpace(body.GetProperty("token").GetString()));
+        // Rotation: the new refresh token differs from the one we sent
+        Assert.NotEqual(refreshToken, body.GetProperty("refreshToken").GetString());
+    }
+
+    [Fact]
+    public async Task Refresh_WithRotatedToken_IsRejected()
+    {
+        var client = _factory.CreateClient();
+        await client.PostAsJsonAsync("/api/auth/register", Registration("refresh2"));
+        var login = await client.PostAsJsonAsync("/api/auth/login", new
+        {
+            username = "owner_refresh2",
+            password = "Str0ng_Pass!"
+        });
+        var refreshToken = (await login.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("refreshToken").GetString();
+
+        // First refresh consumes (rotates) the token
+        await client.PostAsJsonAsync("/api/auth/refresh", new { refreshToken });
+        // Reusing the same (now-revoked) token must fail
+        var reuse = await client.PostAsJsonAsync("/api/auth/refresh", new { refreshToken });
+
+        Assert.Equal(HttpStatusCode.Unauthorized, reuse.StatusCode);
+    }
+
+    [Fact]
     public async Task ProtectedEndpoint_WithoutToken_Returns401()
     {
         var client = _factory.CreateClient();

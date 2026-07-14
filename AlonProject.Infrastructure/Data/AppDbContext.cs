@@ -18,6 +18,7 @@ public class AppDbContext : DbContext
     public DbSet<Shift> Shifts { get; set; }
     public DbSet<Reminder> Reminders { get; set; }
     public DbSet<PersonalTask> PersonalTasks { get; set; }
+    public DbSet<RefreshToken> RefreshTokens { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -154,6 +155,22 @@ public class AppDbContext : DbContext
             // The task list is always fetched per user
             entity.HasIndex(e => new { e.UserId, e.IsCompleted });
             // Deleting a user removes their personal tasks with them
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // RefreshToken configuration
+        modelBuilder.Entity<RefreshToken>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.TokenHash).IsRequired().HasMaxLength(128);
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
+            entity.Ignore(e => e.IsActive); // computed in code, not a column
+            // Refresh always looks a token up by its hash
+            entity.HasIndex(e => e.TokenHash);
+            // Deleting a user removes their refresh tokens with them
             entity.HasOne(e => e.User)
                 .WithMany()
                 .HasForeignKey(e => e.UserId)

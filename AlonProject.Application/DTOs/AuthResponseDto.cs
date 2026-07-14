@@ -14,6 +14,13 @@ public class AuthResponseDto
     public string Token { get; set; } = null!;
 
     /// <summary>
+    /// Long-lived refresh token (raw value) used to obtain a new access token
+    /// once <see cref="ExpiresAt"/> passes, without re-entering credentials.
+    /// The server stores only its hash. Rotated on every refresh.
+    /// </summary>
+    public string RefreshToken { get; set; } = null!;
+
+    /// <summary>
     /// Username of authenticated user (for display).
     /// </summary>
     public string Username { get; set; } = null!;
