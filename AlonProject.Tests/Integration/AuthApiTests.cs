@@ -104,46 +104,52 @@ public class AuthApiTests : IClassFixture<CustomWebApplicationFactory>
     }
 
     [Fact]
-    public async Task Refresh_WithValidRefreshToken_ReturnsNewTokens()
+    public async Task Refresh_WithValidCookie_ReturnsNewAccessToken()
     {
+        // The default WebApplicationFactory client stores and resends cookies,
+        // so the refresh cookie set at login is sent automatically here.
         var client = _factory.CreateClient();
         await client.PostAsJsonAsync("/api/auth/register", Registration("refresh1"));
-        var login = await client.PostAsJsonAsync("/api/auth/login", new
+        await client.PostAsJsonAsync("/api/auth/login", new
         {
             username = "owner_refresh1",
             password = "Str0ng_Pass!"
         });
-        var loginBody = await login.Content.ReadFromJsonAsync<JsonElement>();
-        var refreshToken = loginBody.GetProperty("refreshToken").GetString();
 
-        var response = await client.PostAsJsonAsync("/api/auth/refresh", new { refreshToken });
+        // No body — the credential is the HttpOnly cookie
+        var response = await client.PostAsync("/api/auth/refresh", null);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.False(string.IsNullOrWhiteSpace(body.GetProperty("token").GetString()));
-        // Rotation: the new refresh token differs from the one we sent
-        Assert.NotEqual(refreshToken, body.GetProperty("refreshToken").GetString());
+        // The refresh token is NOT exposed in the body — it lives only in the cookie
+        Assert.Equal(string.Empty, body.GetProperty("refreshToken").GetString());
     }
 
     [Fact]
-    public async Task Refresh_WithRotatedToken_IsRejected()
+    public async Task Login_SetsHttpOnlyRefreshCookie()
     {
         var client = _factory.CreateClient();
-        await client.PostAsJsonAsync("/api/auth/register", Registration("refresh2"));
+        await client.PostAsJsonAsync("/api/auth/register", Registration("cookie1"));
         var login = await client.PostAsJsonAsync("/api/auth/login", new
         {
-            username = "owner_refresh2",
+            username = "owner_cookie1",
             password = "Str0ng_Pass!"
         });
-        var refreshToken = (await login.Content.ReadFromJsonAsync<JsonElement>())
-            .GetProperty("refreshToken").GetString();
 
-        // First refresh consumes (rotates) the token
-        await client.PostAsJsonAsync("/api/auth/refresh", new { refreshToken });
-        // Reusing the same (now-revoked) token must fail
-        var reuse = await client.PostAsJsonAsync("/api/auth/refresh", new { refreshToken });
+        Assert.True(login.Headers.TryGetValues("Set-Cookie", out var cookies));
+        var refreshCookie = Assert.Single(cookies!, c => c.StartsWith("refreshToken="));
+        Assert.Contains("httponly", refreshCookie.ToLowerInvariant());
+    }
 
-        Assert.Equal(HttpStatusCode.Unauthorized, reuse.StatusCode);
+    [Fact]
+    public async Task Refresh_WithoutCookie_Returns401()
+    {
+        var client = _factory.CreateClient(); // never logged in → no cookie
+
+        var response = await client.PostAsync("/api/auth/refresh", null);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]

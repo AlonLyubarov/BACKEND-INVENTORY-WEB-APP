@@ -80,7 +80,7 @@ public class AuthController : ControllerBase
             var response = await _authService.LoginAsync(dto);
             _logger.LogInformation("API Response: User authenticated successfully - Username: {Username}, Role: {Role}",
                 response.Username, response.Role);
-            return Ok(response);
+            return OkWithRefreshCookie(response);
         }
         catch (UnauthorizedAccessException ex)
         {
@@ -141,39 +141,88 @@ public class AuthController : ControllerBase
 
     /// <summary>
     /// POST api/auth/refresh
-    /// Exchanges a valid refresh token for a new access token (and a rotated
-    /// refresh token). Lets the client stay signed in past the access token's
-    /// 1-hour expiry without re-entering credentials.
+    /// Reads the refresh token from the HttpOnly cookie, exchanges it for a new
+    /// access token (rotating the refresh token in the cookie). Lets the client
+    /// stay signed in past the access token's 1-hour expiry. No request body —
+    /// the browser sends the cookie automatically.
     /// </summary>
-    /// <response code="200">New access + refresh token returned</response>
-    /// <response code="401">Refresh token invalid, expired, or already used</response>
+    /// <response code="200">New access token returned; refresh cookie rotated</response>
+    /// <response code="401">Refresh cookie missing, invalid, expired, or already used</response>
     [HttpPost("refresh")]
     [EnableRateLimiting("auth")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    public async Task<ActionResult<AuthResponseDto>> Refresh([FromBody] RefreshTokenRequestDto dto)
+    public async Task<ActionResult<AuthResponseDto>> Refresh()
     {
+        var refreshToken = Request.Cookies[RefreshCookieName];
+        if (string.IsNullOrEmpty(refreshToken))
+        {
+            return Unauthorized(new { error = "No active session." });
+        }
+
         try
         {
-            var response = await _authService.RefreshAsync(dto.RefreshToken);
-            return Ok(response);
+            var response = await _authService.RefreshAsync(refreshToken);
+            return OkWithRefreshCookie(response);
         }
         catch (UnauthorizedAccessException ex)
         {
             _logger.LogWarning("API Error: Token refresh failed");
+            ClearRefreshCookie();
             return Unauthorized(new { error = ex.Message });
         }
     }
 
     /// <summary>
     /// POST api/auth/logout
-    /// Revokes the given refresh token. Always returns 200 (an unknown token is
-    /// treated the same as a valid one — no probing).
+    /// Revokes the refresh token carried in the cookie and clears the cookie.
+    /// Always returns 200 (a missing/unknown token is treated the same — no probing).
     /// </summary>
     [HttpPost("logout")]
-    public async Task<ActionResult> Logout([FromBody] RefreshTokenRequestDto dto)
+    public async Task<ActionResult> Logout()
     {
-        await _authService.RevokeRefreshTokenAsync(dto.RefreshToken);
+        var refreshToken = Request.Cookies[RefreshCookieName];
+        if (!string.IsNullOrEmpty(refreshToken))
+        {
+            await _authService.RevokeRefreshTokenAsync(refreshToken);
+        }
+        ClearRefreshCookie();
         return Ok(new { message = "Logged out." });
+    }
+
+    // ── Refresh-token cookie helpers ─────────────────────────────────────────
+
+    private const string RefreshCookieName = "refreshToken";
+
+    /// <summary>
+    /// Moves the refresh token from the response body into an HttpOnly cookie
+    /// (JS can never read it, so it survives XSS) and returns the rest of the
+    /// auth response. Scoped to /api/auth so it is only ever sent to auth calls.
+    /// </summary>
+    private ActionResult<AuthResponseDto> OkWithRefreshCookie(AuthResponseDto response)
+    {
+        Response.Cookies.Append(RefreshCookieName, response.RefreshToken, new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = Request.IsHttps,            // set on HTTPS (prod); relaxed on http dev
+            SameSite = SameSiteMode.Lax,         // same-site app → CSRF-safe, still sent on our XHR
+            Path = "/api/auth",
+            Expires = DateTimeOffset.UtcNow.AddDays(7)
+        });
+
+        // Never expose the refresh token in the JSON body — it lives only in the cookie
+        response.RefreshToken = string.Empty;
+        return Ok(response);
+    }
+
+    private void ClearRefreshCookie()
+    {
+        Response.Cookies.Delete(RefreshCookieName, new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = Request.IsHttps,
+            SameSite = SameSiteMode.Lax,
+            Path = "/api/auth"
+        });
     }
 }
